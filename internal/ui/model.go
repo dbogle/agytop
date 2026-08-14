@@ -34,9 +34,10 @@ type Model struct {
 	autoScroll  bool
 	maximized   int // -1: normal, 2: logs maximized
 
-	dryRunModalOpen bool
-	helpModalOpen   bool
-	configModalOpen bool
+	dryRunModalOpen  bool
+	helpModalOpen    bool
+	configModalOpen  bool
+	historyModalOpen bool
 
 	notification string
 
@@ -165,6 +166,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.historyModalOpen {
+			switch msg.String() {
+			case "esc", "H", "enter", "q":
+				m.historyModalOpen = false
+				return m, nil
+			case "t":
+				if cur := m.selectedState(); cur != nil {
+					_ = m.supervisor.TriggerScheduled(cur.Config.ID)
+					m.notification = fmt.Sprintf("Triggered immediate execution of '%s'", cur.Config.GetDisplayName())
+				}
+				return m, nil
+			}
+			return m, nil
+		}
 
 		// Keybindings
 		switch msg.String() {
@@ -216,6 +231,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "v":
 			if m.selectedState() != nil {
 				m.configModalOpen = true
+			}
+
+		case "H":
+			if m.selectedState() != nil {
+				m.historyModalOpen = true
 			}
 
 		case "up", "k":
@@ -413,6 +433,11 @@ func (m Model) View() string {
 	if m.configModalOpen {
 		if cur := m.selectedState(); cur != nil {
 			return RenderConfigModal(*cur, m.width, m.height)
+		}
+	}
+	if m.historyModalOpen {
+		if cur := m.selectedState(); cur != nil {
+			return RenderRunHistoryModal(*cur, m.width, m.height)
 		}
 	}
 
@@ -684,6 +709,42 @@ func (m Model) renderInspectorPane(width, height int) string {
 		b.WriteString(fmt.Sprintf("PROBE: %s (Ran %v ago, Exit: %d) - Press [d] for full report\n", drStatus, time.Since(cur.LastDryRun.Timestamp).Round(time.Second), cur.LastDryRun.ExitCode))
 	}
 
+	// Execution Run History Summary
+	if cur.Config.Schedule != "" || len(cur.RunHistory) > 0 {
+		total, rate, succ, fail := cur.GetRunStats()
+		b.WriteString(fmt.Sprintf("\n%s %s\n",
+			lipgloss.NewStyle().Bold(true).Foreground(ColorSecondary).Render("RUN HISTORY:"),
+			lipgloss.NewStyle().Foreground(ColorMuted).Render(fmt.Sprintf("%d Runs | %.1f%% Success (%d✓ / %d✗) - [H] Full View", total, rate, succ, fail)),
+		))
+
+		if len(cur.RunHistory) == 0 {
+			b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  (No runs recorded yet. Press 't' to trigger.)\n"))
+		} else {
+			startIdx := len(cur.RunHistory) - 3
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			for i := len(cur.RunHistory) - 1; i >= startIdx; i-- {
+				r := cur.RunHistory[i]
+				timeStr := r.Timestamp.Format("15:04:05")
+				tag := TagTriggerCron.Render()
+				if r.Trigger == supervisor.TriggerManual {
+					tag = TagTriggerManual.Render()
+				}
+				st := BadgeRunSuccess.Render()
+				if r.ExitCode != 0 {
+					st = BadgeRunFailed.SetString(fmt.Sprintf("✗ %d", r.ExitCode)).Render()
+				}
+				dur := fmt.Sprintf("%v", r.Duration.Round(10*time.Millisecond))
+				snip := r.Snippet
+				if len(snip) > 28 {
+					snip = snip[:25] + "..."
+				}
+				b.WriteString(fmt.Sprintf("  %s %s %-8s %s %s\n", timeStr, tag, dur, st, lipgloss.NewStyle().Foreground(ColorText).Render(snip)))
+			}
+		}
+	}
+
 	return b.String()
 }
 
@@ -707,7 +768,7 @@ func (m Model) renderFooter() string {
 		b.WriteString("  |  ")
 	}
 
-	hints := "[S] START  [X] STOP  [R] RESTART  [D] DRY RUN  [T] TRIGGER  [V] JSON  [/] FILTER  [?] HELP  [Q] QUIT"
+	hints := "[S] START  [X] STOP  [R] RESTART  [D] DRY RUN  [T] TRIGGER  [H] HISTORY  [V] JSON  [/] FILTER  [?] HELP  [Q] QUIT"
 	b.WriteString(FooterStyle.Render(hints))
 	return b.String()
 }

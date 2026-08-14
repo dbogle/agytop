@@ -63,6 +63,24 @@ type DryRunResult struct {
 	NextSchedules  []string          `json:"next_schedules,omitempty"`
 }
 
+// RunTrigger indicates whether an execution was scheduled or manual
+type RunTrigger string
+
+const (
+	TriggerCron   RunTrigger = "CRON"
+	TriggerManual RunTrigger = "MANUAL"
+)
+
+// RunRecord represents a single past execution of a scheduled sidecar
+type RunRecord struct {
+	Timestamp time.Time     `json:"timestamp"`
+	Trigger   RunTrigger    `json:"trigger"`
+	Duration  time.Duration `json:"duration"`
+	ExitCode  int           `json:"exit_code"`
+	Error     string        `json:"error,omitempty"`
+	Snippet   string        `json:"snippet,omitempty"`
+}
+
 // SidecarState holds the live runtime state of a managed sidecar
 type SidecarState struct {
 	mu sync.RWMutex
@@ -79,23 +97,27 @@ type SidecarState struct {
 	MemoryBytes     uint64               `json:"memory_bytes"`
 	Logs            []LogEntry           `json:"logs"`
 	MaxLogs         int                  `json:"-"`
+	RunHistory      []RunRecord          `json:"run_history,omitempty"`
+	MaxHistory      int                  `json:"-"`
 	LastDryRun      *DryRunResult        `json:"last_dry_run,omitempty"`
 	LastScheduleRun time.Time            `json:"last_schedule_run,omitempty"`
 	NextScheduleRun time.Time            `json:"next_schedule_run,omitempty"`
 
-	cmd        *exec.Cmd       `json:"-"`
+	cmd        *exec.Cmd          `json:"-"`
 	cancelFunc context.CancelFunc `json:"-"`
-	stopChan   chan struct{}   `json:"-"`
+	stopChan   chan struct{}      `json:"-"`
 }
 
 // NewSidecarState creates a new state wrapper for a discovered sidecar
 func NewSidecarState(cfg config.SidecarConfig) *SidecarState {
 	s := &SidecarState{
-		Config:   cfg,
-		Status:   StatusStopped,
-		MaxLogs:  1000,
-		Logs:     make([]LogEntry, 0, 100),
-		stopChan: make(chan struct{}),
+		Config:     cfg,
+		Status:     StatusStopped,
+		MaxLogs:    1000,
+		Logs:       make([]LogEntry, 0, 100),
+		MaxHistory: 50,
+		RunHistory: make([]RunRecord, 0, 20),
+		stopChan:   make(chan struct{}),
 	}
 	if cfg.Schedule != "" {
 		s.NextScheduleRun = time.Now().Add(1 * time.Minute)
@@ -138,6 +160,50 @@ func (s *SidecarState) ClearLogs() {
 	s.Logs = make([]LogEntry, 0, 100)
 }
 
+// AddRunRecord records a past execution run in a bounded ring-buffer
+func (s *SidecarState) AddRunRecord(record RunRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.RunHistory) >= s.MaxHistory {
+		s.RunHistory = append(s.RunHistory[1:], record)
+	} else {
+		s.RunHistory = append(s.RunHistory, record)
+	}
+}
+
+// GetRunHistory returns a copy of the recorded execution history
+func (s *SidecarState) GetRunHistory() []RunRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	res := make([]RunRecord, len(s.RunHistory))
+	copy(res, s.RunHistory)
+	return res
+}
+
+// GetRunStats computes overall run count, success rate %, successes, and failures
+func (s *SidecarState) GetRunStats() (total int, successRate float64, successes int, failures int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	total = len(s.RunHistory)
+	if total == 0 {
+		return 0, 100.0, 0, 0
+	}
+
+	for _, r := range s.RunHistory {
+		if r.ExitCode == 0 {
+			successes++
+		} else {
+			failures++
+		}
+	}
+
+	successRate = (float64(successes) / float64(total)) * 100.0
+	return total, successRate, successes, failures
+}
+
 // Snapshot returns a point-in-time copy of the state
 func (s *SidecarState) Snapshot() SidecarState {
 	s.mu.RLock()
@@ -145,6 +211,9 @@ func (s *SidecarState) Snapshot() SidecarState {
 
 	logsCopy := make([]LogEntry, len(s.Logs))
 	copy(logsCopy, s.Logs)
+
+	historyCopy := make([]RunRecord, len(s.RunHistory))
+	copy(historyCopy, s.RunHistory)
 
 	var dryRunCopy *DryRunResult
 	if s.LastDryRun != nil {
@@ -164,6 +233,7 @@ func (s *SidecarState) Snapshot() SidecarState {
 		CPUPercent:      s.CPUPercent,
 		MemoryBytes:     s.MemoryBytes,
 		Logs:            logsCopy,
+		RunHistory:      historyCopy,
 		LastDryRun:      dryRunCopy,
 		LastScheduleRun: s.LastScheduleRun,
 		NextScheduleRun: s.NextScheduleRun,

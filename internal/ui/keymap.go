@@ -22,6 +22,7 @@ type KeyMap struct {
 	ToggleLogs   key.Binding
 	Filter       key.Binding
 	ViewConfig   key.Binding
+	History      key.Binding
 	Help         key.Binding
 	Quit         key.Binding
 	Escape       key.Binding
@@ -93,6 +94,10 @@ func DefaultKeyMap() KeyMap {
 		ViewConfig: key.NewBinding(
 			key.WithKeys("v"),
 			key.WithHelp("v", "view JSON"),
+		),
+		History: key.NewBinding(
+			key.WithKeys("H"),
+			key.WithHelp("H", "run history"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?", "h"),

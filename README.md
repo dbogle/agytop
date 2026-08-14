@@ -80,6 +80,7 @@ Options:
 | **`r`** | **Restart** active process |
 | **`d`** | **Trigger Dry-Run Diagnostics Modal** |
 | **`t`** | **Trigger Immediate Execution** (for scheduled sidecars) |
+| **`H`** | **View Execution Run History & Stats** (for scheduled tasks) |
 | **`v`** | **View Raw `sidecar.json`** definition |
 | **`/`** | **Filter & Search** sidecars |
 | `l` | Toggle maximized full-screen log stream |

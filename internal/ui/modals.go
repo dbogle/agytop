@@ -174,3 +174,96 @@ func RenderConfigModal(state supervisor.SidecarState, width, height int) string 
 	modal := ModalBoxStyle.Width(boxWidth).Render(b.String())
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
+
+// RenderRunHistoryModal renders the full execution run history table
+func RenderRunHistoryModal(state supervisor.SidecarState, width, height int) string {
+	var b strings.Builder
+	b.WriteString(ModalTitleStyle.Render("⚡ ANTIGRAVITY_2.0 // EXECUTION_RUN_HISTORY") + "\n\n")
+
+	total, rate, successes, failures := state.GetRunStats()
+	rateColor := ColorPrimary
+	if rate < 90.0 {
+		rateColor = ColorSecondary
+	}
+	if rate < 70.0 {
+		rateColor = ColorDanger
+	}
+
+	b.WriteString(fmt.Sprintf("%s  %s\n",
+		FooterKeyStyle.Render("TASK: "+state.Config.GetDisplayName()),
+		lipgloss.NewStyle().Foreground(ColorMuted).Render(fmt.Sprintf("(Schedule: %s)", state.Config.Schedule)),
+	))
+
+	statsBar := fmt.Sprintf("TOTAL: %d   SUCCESS: %d   FAILED: %d   SUCCESS RATE: %s",
+		total, successes, failures,
+		lipgloss.NewStyle().Bold(true).Foreground(rateColor).Render(fmt.Sprintf("%.1f%%", rate)),
+	)
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Render(strings.Repeat("─", 68)) + "\n")
+	b.WriteString("  " + statsBar + "\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Render(strings.Repeat("─", 68)) + "\n\n")
+
+	history := state.RunHistory
+	if len(history) == 0 {
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  (No recorded execution runs yet for this task.)\n"))
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorInfo).Render("  • Press [t] to trigger an immediate run now.\n\n"))
+	} else {
+		// Table Headers
+		headerStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorSecondary)
+		b.WriteString(fmt.Sprintf("  %-10s %-10s %-10s %-12s %s\n",
+			headerStyle.Render("TIME"),
+			headerStyle.Render("TRIGGER"),
+			headerStyle.Render("DURATION"),
+			headerStyle.Render("STATUS"),
+			headerStyle.Render("SUMMARY / SNIPPET"),
+		))
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorBorder).Render("  "+strings.Repeat("─", 66)) + "\n")
+
+		// Render from newest to oldest
+		for i := len(history) - 1; i >= 0; i-- {
+			r := history[i]
+			timeStr := r.Timestamp.Format("15:04:05")
+
+			triggerTag := TagTriggerCron.Render()
+			if r.Trigger == supervisor.TriggerManual {
+				triggerTag = TagTriggerManual.Render()
+			}
+
+			durStr := fmt.Sprintf("%v", r.Duration.Round(10*1000*1000))
+			if r.Duration < 10*1000*1000 {
+				durStr = fmt.Sprintf("%v", r.Duration.Round(100*1000))
+			}
+
+			statusBadge := BadgeRunSuccess.Render()
+			if r.ExitCode != 0 {
+				statusBadge = BadgeRunFailed.SetString(fmt.Sprintf("✗ EXIT %d", r.ExitCode)).Render()
+			}
+
+			snippet := r.Snippet
+			if len(snippet) > 35 {
+				snippet = snippet[:32] + "..."
+			}
+
+			b.WriteString(fmt.Sprintf("  %-10s %-10s %-10s %-12s %s\n",
+				timeStr,
+				triggerTag,
+				durStr,
+				statusBadge,
+				lipgloss.NewStyle().Foreground(ColorText).Render(snippet),
+			))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("Press [Esc] or [H] to close  •  Press [t] to trigger manual run"))
+
+	boxWidth := width - 6
+	if boxWidth > 90 {
+		boxWidth = 90
+	}
+	if boxWidth < 50 {
+		boxWidth = 50
+	}
+
+	modal := ModalBoxStyle.Width(boxWidth).Render(b.String())
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}

@@ -343,8 +343,13 @@ func (s *Supervisor) DryRun(id string) (*DryRunResult, error) {
 	return result, nil
 }
 
-// TriggerScheduled forces an immediate single run of a scheduled task
+// TriggerScheduled forces an immediate single run of a scheduled task (manual trigger)
 func (s *Supervisor) TriggerScheduled(id string) error {
+	return s.TriggerScheduledWithSource(id, TriggerManual)
+}
+
+// TriggerScheduledWithSource runs a scheduled task with a specified trigger source
+func (s *Supervisor) TriggerScheduledWithSource(id string, triggerType RunTrigger) error {
 	s.mu.RLock()
 	state, ok := s.sidecars[id]
 	s.mu.RUnlock()
@@ -353,12 +358,14 @@ func (s *Supervisor) TriggerScheduled(id string) error {
 		return fmt.Errorf("sidecar %s not found", id)
 	}
 
-	state.AddLog(SourceSupervisor, "Triggering immediate execution of scheduled task...")
+	startTime := time.Now()
+	state.AddLog(SourceSupervisor, fmt.Sprintf("Triggering %s execution of scheduled task...", triggerType))
+
 	go func() {
 		state.mu.Lock()
 		prevStatus := state.Status
 		state.Status = StatusExecuting
-		state.LastScheduleRun = time.Now()
+		state.LastScheduleRun = startTime
 		state.mu.Unlock()
 
 		cfg := state.Config
@@ -394,6 +401,14 @@ func (s *Supervisor) TriggerScheduled(id string) error {
 			lastErr := state.LastError
 			state.mu.Unlock()
 			state.AddLog(SourceStderr, lastErr)
+			state.AddRunRecord(RunRecord{
+				Timestamp: startTime,
+				Trigger:   triggerType,
+				Duration:  time.Since(startTime),
+				ExitCode:  1,
+				Error:     lastErr,
+				Snippet:   lastErr,
+			})
 			return
 		}
 
@@ -401,27 +416,81 @@ func (s *Supervisor) TriggerScheduled(id string) error {
 		state.PID = cmd.Process.Pid
 		state.mu.Unlock()
 
+		var firstSnippet string
+		var snippetMu sync.Mutex
+
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			pipeStream(stdoutPipe, SourceStdout, state)
+			scanner := bufio.NewScanner(stdoutPipe)
+			for scanner.Scan() {
+				txt := scanner.Text()
+				state.AddLog(SourceStdout, txt)
+				snippetMu.Lock()
+				if firstSnippet == "" && strings.TrimSpace(txt) != "" {
+					firstSnippet = txt
+				}
+				snippetMu.Unlock()
+			}
 		}()
 		go func() {
 			defer wg.Done()
-			pipeStream(stderrPipe, SourceStderr, state)
+			scanner := bufio.NewScanner(stderrPipe)
+			for scanner.Scan() {
+				txt := scanner.Text()
+				state.AddLog(SourceStderr, txt)
+				snippetMu.Lock()
+				if firstSnippet == "" && strings.TrimSpace(txt) != "" {
+					firstSnippet = txt
+				}
+				snippetMu.Unlock()
+			}
 		}()
 
 		wg.Wait()
 		waitErr := cmd.Wait()
+		duration := time.Since(startTime)
+
+		exitCode := 0
+		lastError := ""
+		if waitErr != nil {
+			if exitErr, ok := waitErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+			}
+			lastError = fmt.Sprintf("Exit Code %d", exitCode)
+		}
+
+		snippetMu.Lock()
+		snippet := firstSnippet
+		snippetMu.Unlock()
+		if snippet == "" {
+			if exitCode == 0 {
+				snippet = "Completed successfully"
+			} else {
+				snippet = fmt.Sprintf("Failed with exit code %d", exitCode)
+			}
+		}
+
+		// Record in RunHistory
+		state.AddRunRecord(RunRecord{
+			Timestamp: startTime,
+			Trigger:   triggerType,
+			Duration:  duration,
+			ExitCode:  exitCode,
+			Error:     lastError,
+			Snippet:   snippet,
+		})
 
 		state.mu.Lock()
 		state.PID = 0
-		if waitErr != nil {
+		if exitCode != 0 {
 			state.Status = StatusFailed
 			state.LastError = fmt.Sprintf("Task exited with error: %v", waitErr)
 			state.mu.Unlock()
-			state.AddLog(SourceSupervisor, fmt.Sprintf("Task exited with error: %v", waitErr))
+			state.AddLog(SourceSupervisor, fmt.Sprintf("Task exited with code %d in %v.", exitCode, duration.Round(time.Millisecond)))
 		} else {
 			if cfg.Builtin == "schedule" {
 				state.Status = StatusScheduled
@@ -429,7 +498,7 @@ func (s *Supervisor) TriggerScheduled(id string) error {
 				state.Status = prevStatus
 			}
 			state.mu.Unlock()
-			state.AddLog(SourceSupervisor, "Task completed successfully.")
+			state.AddLog(SourceSupervisor, fmt.Sprintf("Task completed successfully in %v.", duration.Round(time.Millisecond)))
 		}
 	}()
 
@@ -591,7 +660,7 @@ func (s *Supervisor) runBuiltinScheduleLoop(state *SidecarState) {
 			state.mu.Lock()
 			state.NextScheduleRun = t.Add(30 * time.Second)
 			state.mu.Unlock()
-			_ = s.TriggerScheduled(state.Config.ID)
+			_ = s.TriggerScheduledWithSource(state.Config.ID, TriggerCron)
 		}
 	}
 }

@@ -101,6 +101,35 @@ var (
 			Padding(0, 1).
 			SetString("PLUGIN")
 
+	// Trigger Source Tags
+	TagTriggerCron = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FDE047")).
+			Background(lipgloss.Color("#422006")).
+			Bold(true).
+			Padding(0, 1).
+			SetString("CRON")
+
+	TagTriggerManual = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#38BDF8")).
+			Background(lipgloss.Color("#082F49")).
+			Bold(true).
+			Padding(0, 1).
+			SetString("MANUAL")
+
+	// Run History Status Badges
+	BadgeRunSuccess = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#003915")).
+			Background(ColorPrimary).
+			Bold(true).
+			Padding(0, 1).
+			SetString("✓ EXIT 0")
+
+	BadgeRunFailed = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(ColorDanger).
+			Bold(true).
+			Padding(0, 1)
+
 	// Pane Borders (Sharp TUI Technical Brutalism)
 	FocusedBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder()).
