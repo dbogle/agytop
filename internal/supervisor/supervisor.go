@@ -23,6 +23,14 @@ type Supervisor struct {
 	order    []string
 	registry *Registry
 	stopChan chan struct{}
+
+	// baseBackoff and maxBackoff control the exponential backoff applied
+	// between restarts in runProcessLoop. They default to 500ms/30s (the
+	// original hardcoded values) but are exposed as fields -- rather than
+	// locals -- so tests can shrink them to single-digit milliseconds and
+	// exercise restart/backoff behavior without burning wall-clock time.
+	baseBackoff time.Duration
+	maxBackoff  time.Duration
 }
 
 // NewSupervisor creates a supervisor from sidecar configurations
@@ -35,10 +43,12 @@ func NewSupervisor(configs []config.SidecarConfig) *Supervisor {
 // instead of reading/writing the user's real ~/.agytop/state.json.
 func NewSupervisorWithRegistry(configs []config.SidecarConfig, registry *Registry) *Supervisor {
 	sup := &Supervisor{
-		sidecars: make(map[string]*SidecarState),
-		order:    make([]string, 0, len(configs)),
-		registry: registry,
-		stopChan: make(chan struct{}),
+		sidecars:    make(map[string]*SidecarState),
+		order:       make([]string, 0, len(configs)),
+		registry:    registry,
+		stopChan:    make(chan struct{}),
+		baseBackoff: 500 * time.Millisecond,
+		maxBackoff:  30 * time.Second,
 	}
 
 	for _, cfg := range configs {
@@ -653,8 +663,8 @@ func (s *Supervisor) TriggerScheduledWithSource(id string, triggerType RunTrigge
 // runProcessLoop executes a standard command as a detached background daemon
 func (s *Supervisor) runProcessLoop(state *SidecarState) {
 	cfg := state.Config
-	backoff := 500 * time.Millisecond
-	maxBackoff := 30 * time.Second
+	backoff := s.baseBackoff
+	maxBackoff := s.maxBackoff
 
 	for {
 		select {

@@ -17,6 +17,23 @@ import (
 
 type tickMsg time.Time
 
+// supervisorAPI is the consumer-side seam onto the supervisor: exactly the
+// methods internal/ui calls. It is declared here (not in internal/supervisor)
+// so a fake can implement it in tests without spawning real processes --
+// *supervisor.Supervisor satisfies it structurally, with no change needed on
+// the supervisor side.
+type supervisorAPI interface {
+	Start(id string) error
+	Stop(id string) error
+	Restart(id string) error
+	DryRun(id string) (*supervisor.DryRunResult, error)
+	TriggerScheduled(id string) error
+	ClearLogs(id string) error
+	GetAllStates() []supervisor.StateView
+	GetState(id string) (supervisor.StateView, bool)
+	Shutdown()
+}
+
 // stopResultMsg carries the result of an async supervisor.Stop() call back
 // into Update, so Stop (which can block for ~2.3s terminating a stubborn
 // process) never runs on the Bubble Tea event-loop goroutine.
@@ -25,7 +42,7 @@ type stopResultMsg struct {
 	err         error
 }
 
-func stopSidecarCmd(sup *supervisor.Supervisor, id, displayName string) tea.Cmd {
+func stopSidecarCmd(sup supervisorAPI, id, displayName string) tea.Cmd {
 	return func() tea.Msg {
 		err := sup.Stop(id)
 		return stopResultMsg{displayName: displayName, err: err}
@@ -39,7 +56,7 @@ type restartResultMsg struct {
 	err         error
 }
 
-func restartSidecarCmd(sup *supervisor.Supervisor, id, displayName string) tea.Cmd {
+func restartSidecarCmd(sup supervisorAPI, id, displayName string) tea.Cmd {
 	return func() tea.Msg {
 		err := sup.Restart(id)
 		return restartResultMsg{displayName: displayName, err: err}
@@ -48,7 +65,7 @@ func restartSidecarCmd(sup *supervisor.Supervisor, id, displayName string) tea.C
 
 // Model is the main state container for the Bubble Tea TUI
 type Model struct {
-	supervisor *supervisor.Supervisor
+	supervisor supervisorAPI
 	keymap     KeyMap
 
 	sidecars       []supervisor.StateView
@@ -76,7 +93,7 @@ type Model struct {
 }
 
 // NewModel creates a new Bubble Tea model
-func NewModel(sup *supervisor.Supervisor) Model {
+func NewModel(sup supervisorAPI) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Filter sidecars (/)..."
 	ti.Prompt = "> "
@@ -413,6 +430,17 @@ func (m *Model) updateViewportDimensions() {
 		logHeight := (availableHeight * 55) / 100
 		m.logViewport.Width = rightWidth - 4
 		m.logViewport.Height = logHeight - 3
+	}
+
+	// availableHeight is clamped above, but width is not, so the percentage
+	// math goes negative on tiny terminals -- at width 1, rightWidth is 0 and
+	// Width lands at -4. Bubbles tolerates that today, but a negative viewport
+	// dimension is meaningless and only survives by luck.
+	if m.logViewport.Width < 1 {
+		m.logViewport.Width = 1
+	}
+	if m.logViewport.Height < 1 {
+		m.logViewport.Height = 1
 	}
 }
 
