@@ -17,6 +17,35 @@ import (
 
 type tickMsg time.Time
 
+// stopResultMsg carries the result of an async supervisor.Stop() call back
+// into Update, so Stop (which can block for ~2.3s terminating a stubborn
+// process) never runs on the Bubble Tea event-loop goroutine.
+type stopResultMsg struct {
+	displayName string
+	err         error
+}
+
+func stopSidecarCmd(sup *supervisor.Supervisor, id, displayName string) tea.Cmd {
+	return func() tea.Msg {
+		err := sup.Stop(id)
+		return stopResultMsg{displayName: displayName, err: err}
+	}
+}
+
+// restartResultMsg mirrors stopResultMsg: Restart() calls Stop() internally,
+// so it carries the same blocking risk and needs the same async treatment.
+type restartResultMsg struct {
+	displayName string
+	err         error
+}
+
+func restartSidecarCmd(sup *supervisor.Supervisor, id, displayName string) tea.Cmd {
+	return func() tea.Msg {
+		err := sup.Restart(id)
+		return restartResultMsg{displayName: displayName, err: err}
+	}
+}
+
 // Model is the main state container for the Bubble Tea TUI
 type Model struct {
 	supervisor *supervisor.Supervisor
@@ -124,6 +153,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
 			return tickMsg(t)
 		}))
+
+	case stopResultMsg:
+		if msg.err != nil {
+			m.notification = fmt.Sprintf("Error stopping: %v", msg.err)
+		} else {
+			m.notification = fmt.Sprintf("Stopped '%s'", msg.displayName)
+		}
+		m.refreshStates()
+
+	case restartResultMsg:
+		if msg.err != nil {
+			m.notification = fmt.Sprintf("Error restarting: %v", msg.err)
+		} else {
+			m.notification = fmt.Sprintf("Restarted '%s'", msg.displayName)
+		}
+		m.refreshStates()
 
 	case tea.KeyMsg:
 		// Search input mode
@@ -290,22 +335,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "x", "X": // Stop
 			if cur := m.selectedState(); cur != nil {
-				err := m.supervisor.Stop(cur.Config.ID)
-				if err != nil {
-					m.notification = fmt.Sprintf("Error stopping: %v", err)
-				} else {
-					m.notification = fmt.Sprintf("Stopped '%s'", cur.Config.GetDisplayName())
-				}
+				m.notification = fmt.Sprintf("Stopping '%s'...", cur.Config.GetDisplayName())
+				cmds = append(cmds, stopSidecarCmd(m.supervisor, cur.Config.ID, cur.Config.GetDisplayName()))
 			}
 
 		case "r", "R": // Restart
 			if cur := m.selectedState(); cur != nil {
-				err := m.supervisor.Restart(cur.Config.ID)
-				if err != nil {
-					m.notification = fmt.Sprintf("Error restarting: %v", err)
-				} else {
-					m.notification = fmt.Sprintf("Restarted '%s'", cur.Config.GetDisplayName())
-				}
+				m.notification = fmt.Sprintf("Restarting '%s'...", cur.Config.GetDisplayName())
+				cmds = append(cmds, restartSidecarCmd(m.supervisor, cur.Config.ID, cur.Config.GetDisplayName()))
 			}
 
 		case "d", "D": // DRY RUN
