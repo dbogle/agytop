@@ -68,7 +68,7 @@ func TestGetAllStatesConcurrentWithLiveGoroutines(t *testing.T) {
 	// process after the test -- which also raced with this test's own
 	// t.TempDir() cleanup (its log file lived under the registry dir) and
 	// caused an intermittent "directory not empty" failure under -count>1.
-	t.Cleanup(sup.ShutdownAndStopAll)
+	t.Cleanup(func() { stopAndWait(t, sup, "chatty", "crashy") })
 
 	if err := sup.Start("chatty"); err != nil {
 		t.Fatalf("Start(chatty) failed: %v", err)

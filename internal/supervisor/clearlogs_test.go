@@ -33,10 +33,9 @@ func TestClearLogsDoesNotResurrectTailedLines(t *testing.T) {
 
 	sup := NewSupervisorWithRegistry(cfgs, NewRegistryAt(t.TempDir()))
 	// Shutdown() only closes the supervisor's stop channel -- it deliberately
-	// leaves detached (Setsid) daemons running. Only ShutdownAndStopAll()
-	// actually stops them, and without it this test leaks its daemon past the
-	// test run and can trip TempDir cleanup with "directory not empty".
-	t.Cleanup(sup.ShutdownAndStopAll)
+	// leaves detached (Setsid) daemons running. stopAndWait stops them and
+	// blocks until they are gone, so TempDir cleanup cannot race the writer.
+	t.Cleanup(func() { stopAndWait(t, sup, "chatty") })
 
 	if err := sup.Start("chatty"); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -115,6 +114,47 @@ func minLineNo(entries []LogEntry) int {
 		}
 	}
 	return min
+}
+
+// stopAndWait shuts a supervisor down and blocks until its detached children
+// are actually gone.
+//
+// ShutdownAndStopAll returns as soon as it has signalled each process, not
+// once they have exited. Those children hold their log files open under the
+// registry directory, so if that directory is a t.TempDir() the removal can
+// race a still-dying writer and fail with "directory not empty". It only
+// showed up on the macOS CI legs -- Linux happened to win the race locally
+// every time -- so waiting on the PIDs is what actually makes it
+// deterministic rather than lucky.
+func stopAndWait(t *testing.T, sup *Supervisor, ids ...string) {
+	t.Helper()
+
+	// Read PIDs at cleanup time, not registration time: with a restart policy
+	// in play the live PID changes over the life of the test.
+	pids := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if st, ok := sup.GetState(id); ok && st.PID > 0 {
+			pids = append(pids, st.PID)
+		}
+	}
+
+	sup.ShutdownAndStopAll()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		anyAlive := false
+		for _, pid := range pids {
+			if IsPIDAlive(pid) {
+				anyAlive = true
+				break
+			}
+		}
+		if !anyAlive {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("child processes still alive 5s after shutdown: %v", pids)
 }
 
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool, what string) {

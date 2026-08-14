@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"math"
+	"os"
 	"testing"
 )
 
@@ -97,7 +98,10 @@ func TestFormatBytes(t *testing.T) {
 // count from /proc/<pid>/statm content, off fixture bytes rather than a live
 // process so it runs on any OS.
 func TestParseStatmRSS(t *testing.T) {
-	pageSize := uint64(4096) // matches os.Getpagesize() on virtually all Linux targets
+	// Must come from os.Getpagesize(), exactly as parseStatmRSS does -- it is
+	// 4096 on Linux but 16384 on Apple Silicon, and hardcoding 4096 fails the
+	// macOS CI legs while passing locally on Linux.
+	pageSize := uint64(os.Getpagesize())
 	tests := []struct {
 		name    string
 		data    string

@@ -32,7 +32,16 @@ func newFastSupervisor(t *testing.T, cfgs []config.SidecarConfig) *Supervisor {
 	sup := NewSupervisorWithRegistry(cfgs, NewRegistryAt(t.TempDir()))
 	sup.baseBackoff = 5 * time.Millisecond
 	sup.maxBackoff = 20 * time.Millisecond
-	t.Cleanup(sup.ShutdownAndStopAll)
+
+	ids := make([]string, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		ids = append(ids, cfg.ID)
+	}
+	// These scripts exit instantly, but a RestartAlways loop can still have a
+	// live child mid-restart at cleanup time. stopAndWait blocks until the
+	// PIDs are gone so TempDir removal cannot race a dying writer.
+	t.Cleanup(func() { stopAndWait(t, sup, ids...) })
+
 	return sup
 }
 
