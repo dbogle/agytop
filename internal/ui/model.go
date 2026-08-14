@@ -144,7 +144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Modals open
 		if m.dryRunModalOpen {
 			switch msg.String() {
-			case "esc", "d", "enter", "q":
+			case "esc", "d", "D", "enter", "q", "Q":
 				m.dryRunModalOpen = false
 				return m, nil
 			}
@@ -152,7 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.helpModalOpen {
 			switch msg.String() {
-			case "esc", "?", "h", "enter", "q":
+			case "esc", "?", "f1", "enter", "q", "Q":
 				m.helpModalOpen = false
 				return m, nil
 			}
@@ -160,7 +160,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.configModalOpen {
 			switch msg.String() {
-			case "esc", "v", "enter", "q":
+			case "esc", "v", "V", "enter", "q", "Q":
 				m.configModalOpen = false
 				return m, nil
 			}
@@ -168,10 +168,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.historyModalOpen {
 			switch msg.String() {
-			case "esc", "H", "enter", "q":
+			case "esc", "h", "H", "enter", "q", "Q":
 				m.historyModalOpen = false
 				return m, nil
-			case "t":
+			case "t", "T":
 				if cur := m.selectedState(); cur != nil {
 					_ = m.supervisor.TriggerScheduled(cur.Config.ID)
 					m.notification = fmt.Sprintf("Triggered immediate execution of '%s'", cur.Config.GetDisplayName())
@@ -183,12 +183,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Keybindings
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "q", "Q", "ctrl+c":
 			m.supervisor.Shutdown()
 			return m, tea.Quit
 
-		case "?", "h":
+		case "?", "f1":
 			m.helpModalOpen = true
+			return m, nil
+
+		case "h", "H":
+			if m.selectedState() != nil {
+				m.historyModalOpen = true
+			}
 			return m, nil
 
 		case "/":
@@ -207,7 +213,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			m.focusedPane = (m.focusedPane + 2) % 3
 
-		case "l":
+		case "l", "L":
 			if m.maximized == 2 {
 				m.maximized = -1
 			} else {
@@ -216,26 +222,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updateViewportDimensions()
 
-		case "a":
+		case "a", "A":
 			m.autoScroll = !m.autoScroll
 			if m.autoScroll {
 				m.logViewport.GotoBottom()
 			}
 
-		case "c":
+		case "c", "C":
 			if cur := m.selectedState(); cur != nil {
 				cur.ClearLogs()
 				m.notification = fmt.Sprintf("Cleared logs for '%s'", cur.Config.GetDisplayName())
 			}
 
-		case "v":
+		case "v", "V":
 			if m.selectedState() != nil {
 				m.configModalOpen = true
-			}
-
-		case "H":
-			if m.selectedState() != nil {
-				m.historyModalOpen = true
 			}
 
 		case "up", "k":
@@ -277,7 +278,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.autoScroll = true
 			}
 
-		case "s": // Start
+		case "s", "S": // Start
 			if cur := m.selectedState(); cur != nil {
 				err := m.supervisor.Start(cur.Config.ID)
 				if err != nil {
@@ -287,7 +288,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "x": // Stop
+		case "x", "X": // Stop
 			if cur := m.selectedState(); cur != nil {
 				err := m.supervisor.Stop(cur.Config.ID)
 				if err != nil {
@@ -297,7 +298,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "r": // Restart
+		case "r", "R": // Restart
 			if cur := m.selectedState(); cur != nil {
 				err := m.supervisor.Restart(cur.Config.ID)
 				if err != nil {
@@ -307,7 +308,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "d": // DRY RUN
+		case "d", "D": // DRY RUN
 			if cur := m.selectedState(); cur != nil {
 				m.notification = fmt.Sprintf("Executing Dry-Run probe on '%s'...", cur.Config.GetDisplayName())
 				res, err := m.supervisor.DryRun(cur.Config.ID)
@@ -319,7 +320,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "t": // Trigger Scheduled Task
+		case "t", "T": // Trigger Scheduled Task
 			if cur := m.selectedState(); cur != nil {
 				err := m.supervisor.TriggerScheduled(cur.Config.ID)
 				if err != nil {

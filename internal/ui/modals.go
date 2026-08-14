@@ -117,6 +117,7 @@ func RenderHelpModal(width, height int) string {
 				{"l", "Maximize / restore live log console"},
 				{"a", "Toggle log stream follow mode (Auto-scroll)"},
 				{"c", "Clear logs buffer for selected sidecar"},
+				{"h", "View Execution Run History & Stats (for cron tasks)"},
 				{"v", "Inspect raw sidecar.json configuration"},
 				{"/", "Filter sidecars by ID, scope, or status"},
 			},
@@ -254,7 +255,7 @@ func RenderRunHistoryModal(state supervisor.SidecarState, width, height int) str
 		b.WriteString("\n")
 	}
 
-	b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("Press [Esc] or [H] to close  •  Press [t] to trigger manual run"))
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("Press [Esc] or [h] to close  •  Press [t] to trigger manual run"))
 
 	boxWidth := width - 6
 	if boxWidth > 90 {

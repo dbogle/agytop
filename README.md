@@ -80,13 +80,13 @@ Options:
 | **`r`** | **Restart** active process |
 | **`d`** | **Trigger Dry-Run Diagnostics Modal** |
 | **`t`** | **Trigger Immediate Execution** (for scheduled sidecars) |
-| **`H`** | **View Execution Run History & Stats** (for scheduled tasks) |
+| **`h`** | **View Execution Run History & Stats** (for scheduled tasks) |
 | **`v`** | **View Raw `sidecar.json`** definition |
 | **`/`** | **Filter & Search** sidecars |
 | `l` | Toggle maximized full-screen log stream |
 | `a` | Toggle log auto-scroll (Follow mode) |
 | `c` | Clear log buffer for selected sidecar |
-| `?` / `h` | Open **Help Cheat Sheet** |
+| `?` | Open **Help Cheat Sheet** |
 | `Esc` | Close modal / clear search filter |
 | `q` / `Ctrl+C` | Shutdown supervisor & Quit |
 

@@ -56,35 +56,35 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("shift+tab", "prev pane"),
 		),
 		Start: key.NewBinding(
-			key.WithKeys("s"),
+			key.WithKeys("s", "S"),
 			key.WithHelp("s", "start"),
 		),
 		Stop: key.NewBinding(
-			key.WithKeys("x"),
+			key.WithKeys("x", "X"),
 			key.WithHelp("x", "stop"),
 		),
 		Restart: key.NewBinding(
-			key.WithKeys("r"),
+			key.WithKeys("r", "R"),
 			key.WithHelp("r", "restart"),
 		),
 		DryRun: key.NewBinding(
-			key.WithKeys("d"),
+			key.WithKeys("d", "D"),
 			key.WithHelp("d", "dry run"),
 		),
 		Trigger: key.NewBinding(
-			key.WithKeys("t"),
+			key.WithKeys("t", "T"),
 			key.WithHelp("t", "trigger run"),
 		),
 		AutoScroll: key.NewBinding(
-			key.WithKeys("a"),
+			key.WithKeys("a", "A"),
 			key.WithHelp("a", "auto-scroll"),
 		),
 		ClearLogs: key.NewBinding(
-			key.WithKeys("c"),
+			key.WithKeys("c", "C"),
 			key.WithHelp("c", "clear logs"),
 		),
 		ToggleLogs: key.NewBinding(
-			key.WithKeys("l"),
+			key.WithKeys("l", "L"),
 			key.WithHelp("l", "expand logs"),
 		),
 		Filter: key.NewBinding(
@@ -92,19 +92,19 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("/", "filter"),
 		),
 		ViewConfig: key.NewBinding(
-			key.WithKeys("v"),
+			key.WithKeys("v", "V"),
 			key.WithHelp("v", "view JSON"),
 		),
 		History: key.NewBinding(
-			key.WithKeys("H"),
-			key.WithHelp("H", "run history"),
+			key.WithKeys("h", "H"),
+			key.WithHelp("h", "run history"),
 		),
 		Help: key.NewBinding(
-			key.WithKeys("?", "h"),
+			key.WithKeys("?", "f1"),
 			key.WithHelp("?", "help"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c"),
+			key.WithKeys("q", "Q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
 		),
 		Escape: key.NewBinding(
