@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [2.0.0] - 2026-08-14
+## [0.1.0] - 2026-08-14
 
 ### Added
 - **Multi-Scope Discovery Engine**: Automatic detection of sidecars across workspace projects (`.agents/sidecars/`, `_agents/sidecars/`), global user configs (`~/.gemini/config/sidecars/`), plugin directories, and custom CLI paths.

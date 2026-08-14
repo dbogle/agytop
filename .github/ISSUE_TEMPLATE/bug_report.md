@@ -26,5 +26,5 @@ A clear and concise description of what you expected to happen.
 **Environment:**
 - OS: [e.g. Linux, macOS, Windows]
 - Terminal: [e.g. Alacritty, iTerm2, Kitty, Gnome Terminal]
-- agytop version: [e.g. 2.0.0]
+- agytop version: [e.g. 0.1.0]
 - Go version: [e.g. 1.22.6]

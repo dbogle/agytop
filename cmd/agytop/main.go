@@ -14,7 +14,7 @@ import (
 	"agytop/internal/ui"
 )
 
-const AppVersion = "v2.0.0"
+const AppVersion = "v0.1.0"
 
 func main() {
 	var (
