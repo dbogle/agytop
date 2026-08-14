@@ -21,11 +21,11 @@ While the codebase features sound concurrency primitives, detached process manag
 The absence of tests at those layers is not only a coverage statistic. Because CI runs neither `go vet` nor a Windows build, and because no test asserts on CLI *output*, four defects have accumulated in paths nothing checks — including a release target that does not compile and a version string that is wrong in every published binary.
 
 ```
-                          AUDITED (e515fd2)      AFTER PHASE 0
-Total Production Code :   3,470 lines            3,500 lines
-Total Test Code       :     374 lines              765 lines
-Code-to-Test Ratio    :    ~10:1                   ~4.6:1
-Total Statement Cov.  :    36.1%                   56.6%
+                          AUDITED (e515fd2)      CURRENT
+Total Production Code :   3,470 lines            3,507 lines
+Total Test Code       :     374 lines              949 lines
+Code-to-Test Ratio    :    ~10:1                   ~3.7:1
+Total Statement Cov.  :    36.1%                   56.8%
 ```
 
 ### Live Defects Found During This Audit
@@ -46,10 +46,10 @@ Coverage as audited at `e515fd2`, alongside the current figure after Phase 0. Th
 | Package / Module | Prod Lines | Test Lines | Audited | Now | Health Rating | Key Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | [`internal/config`](file:///home/larry/repos/agytop/internal/config/config.go) | 202 | 76 | 77.6% | **77.6%** | 🟡 Moderate | Unchanged. Basic happy-path parsing; missing scope precedence & error branches. |
-| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,572 | 418 | 65.1% | **66.0%** | 🟢 Good Baseline | Dead `GetLogs`/`GetRunHistory` removed; `ClearLogs` wired to a new `Supervisor.ClearLogs(id)` and covered by both a unit test and a live-tailer test. |
-| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,490 | 172 | 0.0% | **48.1%** | 🟡 Moderate | `stateview_test.go` added as the D2 guard: view rendering, both modals, key routing, `GetRunStats`, and the `c`-key live-clear guard. Sparklines, gauges, search, and resize still untested. |
+| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,579 | 652 | 65.1% | **66.5%** | 🟢 Good Baseline | Dead `GetLogs`/`GetRunHistory` removed; `ClearLogs` wired to a new `Supervisor.ClearLogs(id)`; `readLastLines` fixed and covered by six cases. Backoff, metrics, and SIGKILL fallback still untested. |
+| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,490 | 176 | 0.0% | **48.1%** | 🟡 Moderate | `stateview_test.go` added as the D2 guard: view rendering, both modals, key routing, `GetRunStats`, and the `c`-key live-clear guard. Sparklines, gauges, search, and resize still untested. |
 | [`cmd/agytop`](file:///home/larry/repos/agytop/cmd/agytop/main.go) | 237 | 45 | 0.0% | **0.0%** | 🔴 Critical Gap | Has a test now (the D4 guard), but it `exec`s a built binary, so the coverage instrument cannot see the subprocess. Real coverage > 0; the number will stay 0 until in-process tests exist. |
-| **Total / Repository** | **3,500** | **765** | 36.1% | **56.6%** | 🟡 Overall | Ratio improved ~10:1 → ~4.6:1. Substantial surface area still untested. |
+| **Total / Repository** | **3,507** | **949** | 36.1% | **56.8%** | 🟡 Overall | Ratio improved ~10:1 → ~3.7:1. Substantial surface area still untested. |
 
 ---
 
@@ -109,8 +109,11 @@ Located in [`internal/supervisor/supervisor_test.go`](file:///home/larry/repos/a
 2. **Reverse Log Seeking (`readLastLines`)**:
    * [`readLastLines`](file:///home/larry/repos/agytop/internal/supervisor/registry.go#L207-L244) uses chunked backward seeking (`ReadAt`) from EOF to tail multi-MB files without memory exhaustion.
    * *Gap:* Untested on files larger than `tailChunkSize` (64KB), files without trailing newlines, single-line files, or 0-byte files.
-   * **Decide the 0-byte contract before writing the test.** On an empty file the loop never runs, so `data` is nil and [`strings.Split("", "\n")`](file:///home/larry/repos/agytop/internal/supervisor/registry.go#L233) yields `[]string{""}` — one empty line, not an empty slice. Callers therefore tail a blank line out of an empty log. The recommended test will hit this on its first run; treat it as a latent bug to fix rather than behavior to codify.
+   * **Decide the 0-byte contract before writing the test.** On an empty file the loop never runs, so `data` is nil and [`strings.Split("", "\n")`](file:///home/larry/repos/agytop/internal/supervisor/registry.go#L233) yields `[]string{""}` — one empty line, not an empty slice. The recommended test will hit this on its first run; treat it as a contract bug to fix rather than behavior to codify.
+   * *Correction to an earlier draft of this section, which claimed callers therefore tail a blank line out of an empty log.* They do not. `TailFile` is the only caller and it already guards with `if l != ""` before `AddLog` ([`registry.go#L259`](file:///home/larry/repos/agytop/internal/supervisor/registry.go#L259)), so the spurious entry is filtered and there is **no user-visible symptom**. The fix is still worth making — the next caller will not necessarily filter, and a function documented as returning "up to maxLines complete lines" should not invent one — but it is API hygiene, not a live bug, and should not be described as user-facing in a changelog.
    * The >64KB case matters more than its position in this list suggests: the partial-first-line drop ([`registry.go#L235-L239`](file:///home/larry/repos/agytop/internal/supervisor/registry.go#L235-L239)) only executes when `pos > 0`, i.e. only on multi-chunk reads. A single-chunk test — like the template in §6.2 — never reaches the logic the function exists for.
+
+> **✅ Resolved (Phase 1).** `readLastLines` now returns a nil slice when the trimmed content is empty, and its doc comment states the contract. `internal/supervisor/registry_test.go` covers all six cases: the basic tail, the >64KB multi-chunk read with its partial-line drop, a 0-byte file, a newlines-only file, a file with no trailing newline, and `maxLines` exceeding the lines available. `TestReadLastLinesEmptyFile` was confirmed to be the only one that fails against the unfixed function (`got 1 lines ([""]), want 0`) — the other five pass either way, so the guard is precisely targeted rather than incidentally coupled.
 3. **Reattached Process Liveness & Orphan Synthesis**:
    * [`watchReattachedProcess`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go#L126-L166) (22.2% coverage) polls unmonitored PIDs and triggers restarts if configured for `always`.
    * *Gap:* No test simulates an unmonitored child process crashing after reattachment.
@@ -385,8 +388,8 @@ gantt
     D2 StateView type + vet CI gate             :done, p0_3, 2026-08-14, 1d
     D3 gofmt -s -w . + gofmt CI gate            :done, p0_4, 2026-08-14, 1d
     section Phase 1: Immediate Unit Tests
+    Registry readLastLines fix + edge cases     :done, p1_2, 2026-08-14, 1d
     UI pure function tests (sparklines, gauges) :p1_1, 2026-08-17, 2d
-    Registry readLastLines edge cases           :p1_2, 2026-08-18, 2d
     Config deduplication & error handling       :p1_3, 2026-08-19, 2d
     supervisor.FormatBytes unit tests           :p1_4, 2026-08-20, 1d
     section Phase 2: Seams, Core & CLI
@@ -419,9 +422,7 @@ Full detail, verification output, and two follow-on findings are in [§7](#7-rem
    * Unit test `renderAsciiGauge` for 0%, 50%, 100%, and out-of-bounds inputs.
 2. **Create `internal/supervisor/process_test.go`**:
    * Unit test `FormatBytes` across B, KB, MB, GB, and TB ranges. Note this function lives in [`internal/supervisor/process.go#L368`](file:///home/larry/repos/agytop/internal/supervisor/process.go#L368), **not** in `internal/ui` — its test belongs in the supervisor package, not alongside the sparkline tests.
-3. **Create `internal/supervisor/registry_test.go`**:
-   * Test `readLastLines` with single-line files, 10 lines, files lacking trailing newlines, and — most importantly — inputs exceeding the 64KB `tailChunkSize`, which is the only way to reach the backward-seek and partial-line-drop logic.
-   * Settle the 0-byte contract first (see [§2.2](#22-internalsupervisor-651-coverage) gap 2): the function currently returns `[]string{""}` rather than an empty slice.
+3. ~~**Create `internal/supervisor/registry_test.go`**~~ — ✅ **done.** Six cases covering the basic tail, the >64KB multi-chunk read and its partial-line drop, a 0-byte file, a newlines-only file, no trailing newline, and `maxLines` exceeding what is available. The 0-byte contract bug it surfaced is fixed (see [§2.2](#22-internalsupervisor-651-coverage) gap 2).
 4. **Enhance `internal/config/config_test.go`**:
    * Test multi-scope precedence (`Custom` overriding `Workspace` overriding `Global`).
    * Test invalid JSON parsing errors and display name fallbacks.
@@ -473,9 +474,9 @@ Every template below was executed against a scratch copy of the tree at `e515fd2
 
 The two failures were the intended outcome: each is a live defect this document reports, and each test is the regression guard for its fix.
 
-**Post-Phase 0 status of the two failures:**
-* `TestCLIVersionReflectsLdflags` — now **passing** and merged into the repo at `cmd/agytop/main_test.go`; D4 is fixed and guarded.
-* `TestReadLastLinesEmptyFile` — **still failing, and not yet merged.** The 0-byte bug is Phase 1 work and remains open. Merge this test together with the fix, not before it.
+**Current status of the two failures — both now fixed and merged:**
+* `TestCLIVersionReflectsLdflags` — **passing**, at `cmd/agytop/main_test.go`; D4 is fixed and guarded.
+* `TestReadLastLinesEmptyFile` — **passing**, at `internal/supervisor/registry_test.go`, alongside four more cases. The 0-byte contract bug is fixed; see [§2.2](#22-internalsupervisor-651-coverage).
 
 ### 6.1. UI Helper Tests (`internal/ui/model_test.go`)
 
@@ -870,7 +871,7 @@ Several checks went beyond the implementation reports:
 
 ### 7.4. Still Outstanding
 
-Phase 0 and its two follow-on findings only. Phases 1–3 are untouched: the `readLastLines` 0-byte bug, the testability seams in [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written), restart-policy and backoff tests, sparkline and gauge tests, `FormatBytes`, config scope precedence, the `time.Sleep` conversion in the existing supervisor tests, the snapshot-boundary concurrency test in [§4.2](#42--race-only-covers-paths-that-actually-execute), and the coverage-gate design.
+Phase 0, its two follow-on findings, and the `readLastLines` item from Phase 1 are done. Still open: the rest of Phase 1 (sparkline and gauge tests, `FormatBytes`, config scope precedence), the testability seams in [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written), restart-policy and backoff tests, the `time.Sleep` conversion in the existing supervisor tests, the snapshot-boundary concurrency test in [§4.2](#42--race-only-covers-paths-that-actually-execute), the `teatest` harness, and the coverage-gate design.
 
 Finding 3 in [§7.2](#72-findings-surfaced-by-the-remediation) — `cmd/agytop` reporting 0.0% because its test `exec`s a subprocess — is unresolved by design; it is an input to the Phase 3 gate design rather than a defect to fix.
 
