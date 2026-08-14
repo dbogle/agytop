@@ -23,9 +23,9 @@ The absence of tests at those layers is not only a coverage statistic. Because C
 ```
                           AUDITED (e515fd2)      CURRENT
 Total Production Code :   3,470 lines            3,507 lines
-Total Test Code       :     374 lines              949 lines
-Code-to-Test Ratio    :    ~10:1                   ~3.7:1
-Total Statement Cov.  :    36.1%                   56.8%
+Total Test Code       :     374 lines            1,432 lines
+Code-to-Test Ratio    :    ~10:1                   ~2.4:1
+Total Statement Cov.  :    36.1%                   60.5%
 ```
 
 ### Live Defects Found During This Audit
@@ -45,11 +45,11 @@ Coverage as audited at `e515fd2`, alongside the current figure after Phase 0. Th
 
 | Package / Module | Prod Lines | Test Lines | Audited | Now | Health Rating | Key Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| [`internal/config`](file:///home/larry/repos/agytop/internal/config/config.go) | 202 | 76 | 77.6% | **77.6%** | 🟡 Moderate | Unchanged. Basic happy-path parsing; missing scope precedence & error branches. |
-| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,579 | 652 | 65.1% | **66.5%** | 🟢 Good Baseline | Dead `GetLogs`/`GetRunHistory` removed; `ClearLogs` wired to a new `Supervisor.ClearLogs(id)`; `readLastLines` fixed and covered by six cases. Backoff, metrics, and SIGKILL fallback still untested. |
-| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,490 | 176 | 0.0% | **48.1%** | 🟡 Moderate | `stateview_test.go` added as the D2 guard: view rendering, both modals, key routing, `GetRunStats`, and the `c`-key live-clear guard. Sparklines, gauges, search, and resize still untested. |
+| [`internal/config`](file:///home/larry/repos/agytop/internal/config/config.go) | 202 | 338 | 77.6% | **90.6%** | 🟢 Strong | Phase 1 added scope precedence/dedup across all four scopes, malformed-JSON handling, `GetDisplayName` fallbacks, and plugin traversal. |
+| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,579 | 722 | 65.1% | **67.6%** | 🟢 Good Baseline | Dead `GetLogs`/`GetRunHistory` removed; `ClearLogs` wired to `Supervisor.ClearLogs(id)`; `readLastLines` fixed with six cases; `FormatBytes` covered. Backoff, metrics, and SIGKILL fallback still untested. |
+| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,490 | 327 | 0.0% | **54.2%** | 🟡 Moderate | D2 guard plus Phase 1 pure-function tests (sparkline, gauge, `uint64sToFloat64s`). Search filtering, resize clamping, and the async command handlers still untested. |
 | [`cmd/agytop`](file:///home/larry/repos/agytop/cmd/agytop/main.go) | 237 | 45 | 0.0% | **0.0%** | 🔴 Critical Gap | Has a test now (the D4 guard), but it `exec`s a built binary, so the coverage instrument cannot see the subprocess. Real coverage > 0; the number will stay 0 until in-process tests exist. |
-| **Total / Repository** | **3,507** | **949** | 36.1% | **56.8%** | 🟡 Overall | Ratio improved ~10:1 → ~3.7:1. Substantial surface area still untested. |
+| **Total / Repository** | **3,507** | **1,432** | 36.1% | **60.5%** | 🟢 Overall | Ratio improved ~10:1 → ~2.4:1. Phases 0 and 1 complete; Phases 2–3 outstanding. |
 
 ---
 
@@ -389,10 +389,11 @@ gantt
     D3 gofmt -s -w . + gofmt CI gate            :done, p0_4, 2026-08-14, 1d
     section Phase 1: Immediate Unit Tests
     Registry readLastLines fix + edge cases     :done, p1_2, 2026-08-14, 1d
-    UI pure function tests (sparklines, gauges) :p1_1, 2026-08-17, 2d
-    Config deduplication & error handling       :p1_3, 2026-08-19, 2d
-    supervisor.FormatBytes unit tests           :p1_4, 2026-08-20, 1d
+    UI pure function tests (sparklines, gauges) :done, p1_1, 2026-08-14, 1d
+    Config deduplication & error handling       :done, p1_3, 2026-08-14, 1d
+    supervisor.FormatBytes unit tests           :done, p1_4, 2026-08-14, 1d
     section Phase 2: Seams, Core & CLI
+    FormatBytes tier rollover fix               :crit, p2_a, 2026-08-15, 1d
     Testability seams (backoff, ui iface)       :p2_0, 2026-08-21, 2d
     Bubble Tea Model.Update test suite          :p2_1, 2026-08-23, 3d
     Supervisor restart policy & backoff tests   :p2_2, 2026-08-25, 3d
@@ -416,16 +417,15 @@ These were not test-coverage work; they were defects found while auditing, and t
 
 Full detail, verification output, and two follow-on findings are in [§7](#7-remediation-log-phase-0).
 
-### Phase 1: High-Priority Unit Tests (Target Coverage: ~60%)
-1. **Create `internal/ui/model_test.go`**:
-   * Unit test `renderSparkline` across multiple lengths, empty slices, single values, and max scaling.
-   * Unit test `renderAsciiGauge` for 0%, 50%, 100%, and out-of-bounds inputs.
-2. **Create `internal/supervisor/process_test.go`**:
-   * Unit test `FormatBytes` across B, KB, MB, GB, and TB ranges. Note this function lives in [`internal/supervisor/process.go#L368`](file:///home/larry/repos/agytop/internal/supervisor/process.go#L368), **not** in `internal/ui` — its test belongs in the supervisor package, not alongside the sparkline tests.
+### Phase 1: High-Priority Unit Tests (Target Coverage: ~60%) — ✅ Complete
+
+Repo coverage landed at **60.5%**, on target.
+
+1. ~~**Create `internal/ui/model_test.go`**~~ — ✅ **done.** `renderSparkline` across lengths, empty slices, single values, clipping, and non-positive `maxVal`; block selection pinned at both endpoints; `renderAsciiGauge` at 0/50/100%, overflow, negative, and rounding; plus `uint64sToFloat64s`.
+2. ~~**Create `internal/supervisor/process_test.go`**~~ — ✅ **done.** `FormatBytes` across B→PB with every tier boundary and just-below-boundary value. Note this function lives in [`internal/supervisor/process.go#L371`](file:///home/larry/repos/agytop/internal/supervisor/process.go#L371), **not** in `internal/ui` — its test belongs in the supervisor package, not alongside the sparkline tests. The boundary cases surfaced a real rollover bug; see [§7.4](#74-findings-surfaced-by-phase-1).
 3. ~~**Create `internal/supervisor/registry_test.go`**~~ — ✅ **done.** Six cases covering the basic tail, the >64KB multi-chunk read and its partial-line drop, a 0-byte file, a newlines-only file, no trailing newline, and `maxLines` exceeding what is available. The 0-byte contract bug it surfaced is fixed (see [§2.2](#22-internalsupervisor-651-coverage) gap 2).
-4. **Enhance `internal/config/config_test.go`**:
-   * Test multi-scope precedence (`Custom` overriding `Workspace` overriding `Global`).
-   * Test invalid JSON parsing errors and display name fallbacks.
+4. ~~**Enhance `internal/config/config_test.go`**~~ — ✅ **done.** Precedence proven across all four scopes (custom > workspace > global > plugin), plus malformed/empty/missing JSON, all three `GetDisplayName` fallbacks including whitespace-only, and plugin traversal with a non-directory entry. Coverage 77.6% → 90.6%.
+   * *Implementation note for anyone extending these:* workspace scope resolves through `os.Getwd()`, and **`t.Chdir` is unavailable** — go.mod pins `go 1.22.6` and `t.Chdir` arrived in 1.24. The tests use an `os.Chdir` helper with `t.Cleanup` restoring the original. Combined with `t.Setenv("HOME", ...)` for the global and plugin scopes, this makes them process-global, so none of them may call `t.Parallel()`. Hermeticity was verified by running the suite under `HOME=/nonexistent`.
 
 ### Phase 2: Seams, Core Logic & CLI Testing (Target Coverage: ~80%)
 
@@ -869,9 +869,33 @@ Several checks went beyond the implementation reports:
 * The claim that clearing is safe against a live `TailFile` was tested rather than reasoned about, via `TestClearLogsDoesNotResurrectTailedLines`, and run 5× under `-race` to check for flakiness before merging.
 * Test daemons were confirmed not to leak: no `bash` process from the tailer test survives `t.Cleanup(sup.Shutdown)`, which matters because sidecars launch detached with `Setsid`.
 
-### 7.4. Still Outstanding
+### 7.4. Findings Surfaced by Phase 1
 
-Phase 0, its two follow-on findings, and the `readLastLines` item from Phase 1 are done. Still open: the rest of Phase 1 (sparkline and gauge tests, `FormatBytes`, config scope precedence), the testability seams in [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written), restart-policy and backoff tests, the `time.Sleep` conversion in the existing supervisor tests, the snapshot-boundary concurrency test in [§4.2](#42--race-only-covers-paths-that-actually-execute), the `teatest` harness, and the coverage-gate design.
+**1. `FormatBytes` never rolls over at the top of a unit tier — a real display bug, left unfixed.** Phase 1 was scoped to writing tests, so this is documented rather than repaired:
+
+```
+FormatBytes(1023)          = "1023 B"
+FormatBytes(1024)          = "1.0 KB"
+FormatBytes(1048575)       = "1024.0 KB"   <-- should be "1.0 MB"
+FormatBytes(1048576)       = "1.0 MB"
+FormatBytes(1073741823)    = "1024.0 MB"   <-- should be "1.0 GB"
+FormatBytes(1099511627775) = "1024.0 GB"   <-- should be "1.0 TB"
+```
+
+The cause is a mismatch between how the tier is chosen and how the number is printed ([`process.go#L371-L382`](file:///home/larry/repos/agytop/internal/supervisor/process.go#L371-L382)). The tier comes from *integer* division — `for n := b / unit; n >= unit; n /= unit` — so at one byte below 1 MiB, `n` is 1023 and the loop stops at the KB tier. The printed value comes from *float* division, `1048575/1024 = 1023.999…`, which `%.1f` rounds to `1024.0`. Every tier boundary has this sliver: roughly the top 0.005% of each range, i.e. any value where `b/div` rounds to ≥ 1024.0.
+
+User-visible in the Inspector's memory readout, though only for a narrow band just under each boundary. *Fix:* after computing the quotient, promote the tier when the rounded value reaches 1024 — or select the tier from the float quotient rather than the integer one. The existing table test pins current behavior, so the fix must update those two expectations deliberately.
+
+**2. Two behaviors confirmed correct-as-written and pinned rather than "fixed".** `uint64sToFloat64s` collides `math.MaxUint64` with `math.MaxUint64 - 1` onto the same `float64`; that is inherent to a 53-bit mantissa and the function does nothing beyond the cast. And `LoadSidecarFromFile` on a 0-byte file returns `unexpected end of JSON input` rather than a zero-value config — the safer of the two behaviors. Both are now asserted so a future refactor cannot change them silently.
+
+### 7.5. Still Outstanding
+
+**Phases 0 and 1 are complete**, along with the two follow-on findings from Phase 0.
+
+Still open, in the order the roadmap recommends:
+* The one unfixed defect above — `FormatBytes` tier rollover ([§7.4](#74-findings-surfaced-by-phase-1)).
+* **Phase 2**: the testability seams in [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written) (backoff fields, the `internal/ui` supervisor interface, the `/proc` parsing split), then restart-policy and backoff tests, the `Model.Update` suite for search filtering and resize clamping, the `time.Sleep` conversion in the pre-existing supervisor tests, the snapshot-boundary concurrency test in [§4.2](#42--race-only-covers-paths-that-actually-execute), and the CLI subcommand tests.
+* **Phase 3**: the `teatest` harness, the Windows build-tag split if Windows support is ever wanted ([§3.3.2](#332-windows-portability--currently-broken-d1)), and the coverage-gate design.
 
 Finding 3 in [§7.2](#72-findings-surfaced-by-the-remediation) — `cmd/agytop` reporting 0.0% because its test `exec`s a subprocess — is unresolved by design; it is an input to the Phase 3 gate design rather than a defect to fix.
 
