@@ -296,3 +296,47 @@ done
 		_ = TerminatePID(pid)
 	}
 }
+
+// TestSupervisorClearLogs guards against a bug where the "c" keybinding
+// cleared a point-in-time StateView copy instead of the live SidecarState,
+// so the in-memory log buffer was never actually emptied. ClearLogs must
+// mutate the live state that GetState/GetAllStates snapshot from.
+func TestSupervisorClearLogs(t *testing.T) {
+	cfg := config.SidecarConfig{
+		ID:            "test-clear-logs",
+		DisplayName:   "Clear Logs Target",
+		Command:       "true",
+		RestartPolicy: config.RestartNever,
+	}
+
+	sup := NewSupervisorWithRegistry([]config.SidecarConfig{cfg}, NewRegistryAt(t.TempDir()))
+	defer sup.Shutdown()
+
+	// Seed the LIVE state's log buffer directly (not a snapshot copy).
+	live, ok := sup.sidecars["test-clear-logs"]
+	if !ok {
+		t.Fatalf("live state for test-clear-logs not found")
+	}
+	live.AddLog(SourceSupervisor, "line one")
+	live.AddLog(SourceSupervisor, "line two")
+
+	if seeded, ok := sup.GetState("test-clear-logs"); !ok || len(seeded.Logs) != 2 {
+		t.Fatalf("expected 2 seeded log entries before clear, got %+v", seeded.Logs)
+	}
+
+	if err := sup.ClearLogs("test-clear-logs"); err != nil {
+		t.Fatalf("ClearLogs returned unexpected error: %v", err)
+	}
+
+	after, ok := sup.GetState("test-clear-logs")
+	if !ok {
+		t.Fatalf("could not retrieve state after ClearLogs")
+	}
+	if len(after.Logs) != 0 {
+		t.Errorf("expected live state logs to be empty after ClearLogs, got %d entries: %+v", len(after.Logs), after.Logs)
+	}
+
+	if err := sup.ClearLogs("does-not-exist"); err == nil {
+		t.Error("expected ClearLogs on unknown id to return a non-nil error")
+	}
+}

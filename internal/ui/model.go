@@ -275,12 +275,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "c", "C":
 			if cur := m.selectedState(); cur != nil {
-				// cur is a point-in-time StateView (mutex-free), not the live
-				// supervisor state, so this only clears the locally-held
-				// copy's log buffer -- matching the pre-refactor behavior of
-				// calling ClearLogs() on a Snapshot()-ed copy.
-				cur.Logs = make([]supervisor.LogEntry, 0, 100)
-				m.notification = fmt.Sprintf("Cleared logs for '%s'", cur.Config.GetDisplayName())
+				// Cleared synchronously against the live supervisor state --
+				// unlike Stop/Restart this only takes a mutex and reallocates
+				// a slice, so it doesn't need the async tea.Cmd treatment.
+				if err := m.supervisor.ClearLogs(cur.Config.ID); err != nil {
+					m.notification = fmt.Sprintf("Error clearing logs: %v", err)
+				} else {
+					m.notification = fmt.Sprintf("Cleared logs for '%s'", cur.Config.GetDisplayName())
+					m.refreshStates()
+					m.updateLogContent()
+				}
 			}
 
 		case "v", "V":
@@ -421,8 +425,7 @@ func (m *Model) updateLogContent() {
 
 	var b strings.Builder
 	// cur.Logs is already a deep copy from Snapshot(), so no further copying
-	// (and no lock) is needed here -- equivalent to the pre-refactor
-	// GetLogs() call on the snapshot copy.
+	// (and no lock) is needed here.
 	logs := cur.Logs
 	if len(logs) == 0 {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No log entries recorded. Press [s] to start sidecar or [d] for dry run."))

@@ -153,16 +153,6 @@ func (s *SidecarState) AddLog(source LogSource, text string) {
 	}
 }
 
-// GetLogs returns a copy of the log buffer
-func (s *SidecarState) GetLogs() []LogEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	res := make([]LogEntry, len(s.Logs))
-	copy(res, s.Logs)
-	return res
-}
-
 // ClearLogs resets the log buffer
 func (s *SidecarState) ClearLogs() {
 	s.mu.Lock()
@@ -180,16 +170,6 @@ func (s *SidecarState) AddRunRecord(record RunRecord) {
 	} else {
 		s.RunHistory = append(s.RunHistory, record)
 	}
-}
-
-// GetRunHistory returns a copy of the recorded execution history
-func (s *SidecarState) GetRunHistory() []RunRecord {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	res := make([]RunRecord, len(s.RunHistory))
-	copy(res, s.RunHistory)
-	return res
 }
 
 // AddMetricSample appends a CPU/memory sample to the rolling history ring
