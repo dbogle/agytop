@@ -1,0 +1,9 @@
+{
+  "display_name": "Nightly Health Reporter",
+  "description": "Scheduled Antigravity health snapshot and report generator",
+  "builtin": "schedule",
+  "command": "bash",
+  "args": ["report.sh"],
+  "schedule": "0 0 * * *",
+  "restart_policy": "never"
+}

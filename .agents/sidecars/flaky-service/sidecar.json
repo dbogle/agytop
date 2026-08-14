@@ -1,0 +1,7 @@
+{
+  "display_name": "Flaky Remote Sync",
+  "description": "Demonstrates supervisor crash detection and exponential backoff",
+  "command": "bash",
+  "args": ["flaky.sh"],
+  "restart_policy": "on-failure"
+}

@@ -1,0 +1,7 @@
+{
+  "display_name": "IPC Telemetry Bridge",
+  "description": "Relays diagnostic events to Antigravity 2.0 desktop auxiliary pane",
+  "command": "bash",
+  "args": ["bridge.sh"],
+  "restart_policy": "always"
+}

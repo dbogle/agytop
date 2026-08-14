@@ -1,0 +1,11 @@
+{
+  "display_name": "Codebase Embeddings Indexer",
+  "description": "Background worker maintaining vector embeddings for Antigravity code search",
+  "command": "python3",
+  "args": ["worker.py"],
+  "restart_policy": "always",
+  "env": {
+    "INDEX_REFRESH_RATE": "2s",
+    "EMBEDDING_MODEL": "gemini-embedding-001"
+  }
+}
