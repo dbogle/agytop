@@ -14,15 +14,15 @@ import (
 	"agytop/internal/ui"
 )
 
-const AppVersion = "v0.1.0"
+var AppVersion = "v0.1.0"
 
 func main() {
 	var (
-		customPath  string
-		runDemo     bool
-		showVersion bool
+		customPath   string
+		runDemo      bool
+		showVersion  bool
 		dryRunTarget string
-		listOnly    bool
+		listOnly     bool
 	)
 
 	flag.StringVar(&customPath, "config", "", "Custom path to sidecar.json or directory containing sidecars")

@@ -51,8 +51,8 @@ type Model struct {
 	supervisor *supervisor.Supervisor
 	keymap     KeyMap
 
-	sidecars       []supervisor.SidecarState
-	filteredStates []supervisor.SidecarState
+	sidecars       []supervisor.StateView
+	filteredStates []supervisor.StateView
 	cursor         int
 	focusedPane    int // 0: Sidecar list, 1: Details/Inspector, 2: Logs
 
@@ -106,7 +106,7 @@ func (m *Model) refreshStates() {
 	if filterText == "" {
 		m.filteredStates = m.sidecars
 	} else {
-		filtered := make([]supervisor.SidecarState, 0)
+		filtered := make([]supervisor.StateView, 0)
 		for _, s := range m.sidecars {
 			match := strings.Contains(strings.ToLower(s.Config.ID), filterText) ||
 				strings.Contains(strings.ToLower(s.Config.DisplayName), filterText) ||
@@ -275,7 +275,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "c", "C":
 			if cur := m.selectedState(); cur != nil {
-				cur.ClearLogs()
+				// cur is a point-in-time StateView (mutex-free), not the live
+				// supervisor state, so this only clears the locally-held
+				// copy's log buffer -- matching the pre-refactor behavior of
+				// calling ClearLogs() on a Snapshot()-ed copy.
+				cur.Logs = make([]supervisor.LogEntry, 0, 100)
 				m.notification = fmt.Sprintf("Cleared logs for '%s'", cur.Config.GetDisplayName())
 			}
 
@@ -378,7 +382,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) selectedState() *supervisor.SidecarState {
+func (m *Model) selectedState() *supervisor.StateView {
 	if m.cursor >= 0 && m.cursor < len(m.filteredStates) {
 		return &m.filteredStates[m.cursor]
 	}
@@ -416,7 +420,10 @@ func (m *Model) updateLogContent() {
 	}
 
 	var b strings.Builder
-	logs := cur.GetLogs()
+	// cur.Logs is already a deep copy from Snapshot(), so no further copying
+	// (and no lock) is needed here -- equivalent to the pre-refactor
+	// GetLogs() call on the snapshot copy.
+	logs := cur.Logs
 	if len(logs) == 0 {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No log entries recorded. Press [s] to start sidecar or [d] for dry run."))
 	} else {

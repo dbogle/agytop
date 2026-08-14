@@ -183,11 +183,11 @@ func (s *Supervisor) AddOrUpdate(cfg config.SidecarConfig) {
 }
 
 // GetAllStates returns snapshots of all sidecars in stable order
-func (s *Supervisor) GetAllStates() []SidecarState {
+func (s *Supervisor) GetAllStates() []StateView {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	res := make([]SidecarState, 0, len(s.order))
+	res := make([]StateView, 0, len(s.order))
 	for _, id := range s.order {
 		if state, ok := s.sidecars[id]; ok {
 			res = append(res, state.Snapshot())
@@ -197,13 +197,13 @@ func (s *Supervisor) GetAllStates() []SidecarState {
 }
 
 // GetState returns a snapshot of a single sidecar
-func (s *Supervisor) GetState(id string) (SidecarState, bool) {
+func (s *Supervisor) GetState(id string) (StateView, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	state, ok := s.sidecars[id]
 	if !ok {
-		return SidecarState{}, false
+		return StateView{}, false
 	}
 	return state.Snapshot(), true
 }

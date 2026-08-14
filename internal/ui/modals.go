@@ -154,7 +154,7 @@ func RenderHelpModal(width, height int) string {
 }
 
 // RenderConfigModal renders the raw sidecar.json definition
-func RenderConfigModal(state supervisor.SidecarState, width, height int) string {
+func RenderConfigModal(state supervisor.StateView, width, height int) string {
 	var b strings.Builder
 	b.WriteString(ModalTitleStyle.Render(fmt.Sprintf("📄 RAW_CONFIG // %s", state.Config.GetDisplayName())) + "\n\n")
 	b.WriteString(fmt.Sprintf("PATH : %s\nSCOPE: %s\n\n", state.Config.Path, state.Config.Scope))
@@ -177,7 +177,7 @@ func RenderConfigModal(state supervisor.SidecarState, width, height int) string 
 }
 
 // RenderRunHistoryModal renders the full execution run history table
-func RenderRunHistoryModal(state supervisor.SidecarState, width, height int) string {
+func RenderRunHistoryModal(state supervisor.StateView, width, height int) string {
 	var b strings.Builder
 	b.WriteString(ModalTitleStyle.Render("⚡ ANTIGRAVITY_2.0 // EXECUTION_RUN_HISTORY") + "\n\n")
 

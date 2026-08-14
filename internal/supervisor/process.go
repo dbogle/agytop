@@ -211,17 +211,40 @@ func (s *SidecarState) AddMetricSample(cpuPercent float64, memBytes uint64) {
 	}
 }
 
-// GetRunStats computes overall run count, success rate %, successes, and failures
-func (s *SidecarState) GetRunStats() (total int, successRate float64, successes int, failures int) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// StateView is a mutex-free, point-in-time view of a SidecarState suitable
+// for passing by value (e.g. across the supervisor -> UI boundary). It
+// carries no unexported runtime fields (cmd, cancelFunc, stopChan) and no
+// lock, so it is safe to copy freely.
+type StateView struct {
+	Config          config.SidecarConfig `json:"config"`
+	Status          ProcessStatus        `json:"status"`
+	PID             int                  `json:"pid"`
+	StartedAt       time.Time            `json:"started_at"`
+	StoppedAt       time.Time            `json:"stopped_at"`
+	Restarts        int                  `json:"restarts"`
+	LastExitCode    int                  `json:"last_exit_code"`
+	LastError       string               `json:"last_error"`
+	CPUPercent      float64              `json:"cpu_percent"`
+	MemoryBytes     uint64               `json:"memory_bytes"`
+	CPUHistory      []float64            `json:"cpu_history,omitempty"`
+	MemHistory      []uint64             `json:"mem_history,omitempty"`
+	Logs            []LogEntry           `json:"logs"`
+	RunHistory      []RunRecord          `json:"run_history,omitempty"`
+	LastDryRun      *DryRunResult        `json:"last_dry_run,omitempty"`
+	LastScheduleRun time.Time            `json:"last_schedule_run,omitempty"`
+	NextScheduleRun time.Time            `json:"next_schedule_run,omitempty"`
+}
 
-	total = len(s.RunHistory)
+// GetRunStats computes overall run count, success rate %, successes, and
+// failures from an immutable view. No locking is needed since StateView is
+// a point-in-time copy that nothing else can mutate.
+func (v StateView) GetRunStats() (total int, successRate float64, successes int, failures int) {
+	total = len(v.RunHistory)
 	if total == 0 {
 		return 0, 100.0, 0, 0
 	}
 
-	for _, r := range s.RunHistory {
+	for _, r := range v.RunHistory {
 		if r.ExitCode == 0 {
 			successes++
 		} else {
@@ -233,8 +256,8 @@ func (s *SidecarState) GetRunStats() (total int, successRate float64, successes 
 	return total, successRate, successes, failures
 }
 
-// Snapshot returns a point-in-time copy of the state
-func (s *SidecarState) Snapshot() SidecarState {
+// Snapshot returns a point-in-time, mutex-free view of the state
+func (s *SidecarState) Snapshot() StateView {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -256,7 +279,7 @@ func (s *SidecarState) Snapshot() SidecarState {
 		dryRunCopy = &dr
 	}
 
-	return SidecarState{
+	return StateView{
 		Config:          s.Config,
 		Status:          s.Status,
 		PID:             s.PID,

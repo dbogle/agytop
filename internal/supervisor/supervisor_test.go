@@ -191,7 +191,7 @@ func TestSupervisorRunHistoryAndStats(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	state, _ := sup.GetState("cron-success")
-	history := state.GetRunHistory()
+	history := state.RunHistory
 	if len(history) != 2 {
 		t.Fatalf("expected 2 run history records, got %d", len(history))
 	}
@@ -215,7 +215,7 @@ func TestSupervisorRunHistoryAndStats(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	failState, _ := sup.GetState("cron-fail")
-	failHistory := failState.GetRunHistory()
+	failHistory := failState.RunHistory
 	if len(failHistory) != 1 {
 		t.Fatalf("expected 1 run history record, got %d", len(failHistory))
 	}
