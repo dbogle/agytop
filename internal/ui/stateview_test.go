@@ -124,3 +124,53 @@ func TestKeyRoutingOverStateView(t *testing.T) {
 		}
 	}
 }
+
+// TestClearLogsKeyClearsLiveState is the regression guard for the bug where
+// "c" only cleared the ephemeral StateView copy in m.filteredStates -- the
+// live supervisor.SidecarState was never touched, so the next 200ms tick's
+// refreshStates() overwrote the clear and the old log lines reappeared. This
+// test fails against that one-line handler because it checks the supervisor
+// directly, not m's local copy.
+func TestClearLogsKeyClearsLiveState(t *testing.T) {
+	m := newTestModel(t)
+
+	cur := m.selectedState()
+	if cur == nil {
+		t.Fatal("selectedState() returned nil")
+	}
+	id := cur.Config.ID
+
+	sup := m.supervisor
+
+	// Seed logs on the LIVE state via the supervisor's own view, then confirm
+	// via GetState that they landed before we clear them.
+	if before, ok := sup.GetState(id); !ok || len(before.Logs) == 0 {
+		// Nothing pre-seeded by NewModel/discovery; seed some via a dry run's
+		// supervisor log so there is something real to clear.
+		if _, err := sup.DryRun(id); err != nil {
+			t.Fatalf("DryRun failed while seeding logs: %v", err)
+		}
+	}
+
+	seeded, ok := sup.GetState(id)
+	if !ok || len(seeded.Logs) == 0 {
+		t.Fatalf("expected seeded logs on live state before clearing, got %+v", seeded.Logs)
+	}
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")}
+	var model tea.Model = m
+	model, _ = model.Update(msg)
+	m = model.(Model)
+
+	live, ok := sup.GetState(id)
+	if !ok {
+		t.Fatalf("could not retrieve live state for %q after clear", id)
+	}
+	if len(live.Logs) != 0 {
+		t.Errorf("expected live supervisor state logs to be empty after 'c', got %d entries: %+v", len(live.Logs), live.Logs)
+	}
+
+	if m.notification == "" {
+		t.Error("expected a notification to be set after clearing logs")
+	}
+}

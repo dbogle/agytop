@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carried a copy of the live `sync.RWMutex` across the supervisor/UI boundary.
   Snapshots are now a distinct mutex-free `supervisor.StateView` type, making
   the copy semantics explicit and the value-passing safe by construction.
+- **The `c` (clear logs) keybinding never actually cleared anything.** It
+  operated on `m.selectedState()`, a point-in-time `StateView` copy, so the
+  live log buffer was untouched and the next 200ms poll tick overwrote the
+  copy with the still-full original, making the logs silently reappear.
+  `Supervisor.ClearLogs(id)` now clears the live `SidecarState`'s buffer
+  directly (in-memory only -- the on-disk log file and its tailer offset are
+  left alone), and the UI refreshes immediately instead of waiting on the
+  next tick.
 
 ### Added
 - CI now enforces `go vet ./...` on every matrix leg and `gofmt -s -l .` on one,

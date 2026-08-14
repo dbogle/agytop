@@ -291,6 +291,23 @@ func (s *Supervisor) Stop(id string) error {
 	return nil
 }
 
+// ClearLogs empties the in-memory log ring buffer for a sidecar. It only
+// touches SidecarState.Logs -- the on-disk log file under ~/.agytop/logs/ is
+// left untouched, since TailFile follows it by seeking from its own offset
+// and truncating the file would fight that tailer and destroy user data.
+func (s *Supervisor) ClearLogs(id string) error {
+	s.mu.RLock()
+	state, ok := s.sidecars[id]
+	s.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("sidecar %s not found", id)
+	}
+
+	state.ClearLogs()
+	return nil
+}
+
 // Restart stops and starts the sidecar
 func (s *Supervisor) Restart(id string) error {
 	if err := s.Stop(id); err != nil {
