@@ -57,7 +57,11 @@ func (r *Registry) GetLogPath(id string) string {
 func (r *Registry) Load() (map[string]PersistedState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.loadLocked()
+}
 
+// loadLocked reads persisted state; callers must hold r.mu.
+func (r *Registry) loadLocked() (map[string]PersistedState, error) {
 	data, err := os.ReadFile(r.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -77,7 +81,11 @@ func (r *Registry) Load() (map[string]PersistedState, error) {
 func (r *Registry) Save(states map[string]PersistedState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.saveLocked(states)
+}
 
+// saveLocked writes state to disk; callers must hold r.mu.
+func (r *Registry) saveLocked(states map[string]PersistedState) error {
 	data, err := json.MarshalIndent(states, "", "  ")
 	if err != nil {
 		return err
@@ -85,9 +93,15 @@ func (r *Registry) Save(states map[string]PersistedState) error {
 	return os.WriteFile(r.filePath, data, 0644)
 }
 
-// UpdateState saves or deletes a single sidecar's persisted record
+// UpdateState saves or deletes a single sidecar's persisted record.
+// The entire load-modify-save cycle is serialized under r.mu so concurrent
+// updates from independent sidecar goroutines can't race and silently
+// clobber each other's writes.
 func (r *Registry) UpdateState(record PersistedState, remove bool) error {
-	states, err := r.Load()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	states, err := r.loadLocked()
 	if err != nil {
 		states = make(map[string]PersistedState)
 	}
@@ -98,7 +112,7 @@ func (r *Registry) UpdateState(record PersistedState, remove bool) error {
 		states[record.ID] = record
 	}
 
-	return r.Save(states)
+	return r.saveLocked(states)
 }
 
 // IsPIDAlive checks if a process with the given PID is currently active in the OS
