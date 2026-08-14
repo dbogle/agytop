@@ -123,3 +123,12 @@ Place `sidecar.json` in your workspace (`.agents/sidecars/<name>/sidecar.json`) 
   "restart_policy": "never"
 }
 ```
+
+---
+
+## 📄 Documentation & Community
+
+* **[Changelog](CHANGELOG.md)**: Full version history and release notes.
+* **[Contributing Guide](CONTRIBUTING.md)**: Instructions for developing and submitting PRs.
+* **[License](LICENSE)**: MIT License.
+
