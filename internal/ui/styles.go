@@ -110,11 +110,11 @@ var (
 			SetString("CRON")
 
 	TagTriggerManual = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#38BDF8")).
-			Background(lipgloss.Color("#082F49")).
-			Bold(true).
-			Padding(0, 1).
-			SetString("MANUAL")
+				Foreground(lipgloss.Color("#38BDF8")).
+				Background(lipgloss.Color("#082F49")).
+				Bold(true).
+				Padding(0, 1).
+				SetString("MANUAL")
 
 	// Run History Status Badges
 	BadgeRunSuccess = lipgloss.NewStyle().
@@ -161,7 +161,7 @@ var (
 				Foreground(ColorPrimary)
 
 	GaugeEmptyStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#27272A"))
+			Foreground(lipgloss.Color("#27272A"))
 
 	// Log Styles
 	LogStdoutStyle = lipgloss.NewStyle().

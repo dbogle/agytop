@@ -6,26 +6,26 @@ import (
 
 // KeyMap defines the full keyboard shortcuts supported in the TUI
 type KeyMap struct {
-	Up           key.Binding
-	Down         key.Binding
-	Top          key.Binding
-	Bottom       key.Binding
-	NextPane     key.Binding
-	PrevPane     key.Binding
-	Start        key.Binding
-	Stop         key.Binding
-	Restart      key.Binding
-	DryRun       key.Binding
-	Trigger      key.Binding
-	AutoScroll   key.Binding
-	ClearLogs    key.Binding
-	ToggleLogs   key.Binding
-	Filter       key.Binding
-	ViewConfig   key.Binding
-	History      key.Binding
-	Help         key.Binding
-	Quit         key.Binding
-	Escape       key.Binding
+	Up         key.Binding
+	Down       key.Binding
+	Top        key.Binding
+	Bottom     key.Binding
+	NextPane   key.Binding
+	PrevPane   key.Binding
+	Start      key.Binding
+	Stop       key.Binding
+	Restart    key.Binding
+	DryRun     key.Binding
+	Trigger    key.Binding
+	AutoScroll key.Binding
+	ClearLogs  key.Binding
+	ToggleLogs key.Binding
+	Filter     key.Binding
+	ViewConfig key.Binding
+	History    key.Binding
+	Help       key.Binding
+	Quit       key.Binding
+	Escape     key.Binding
 }
 
 // DefaultKeyMap returns the configured default key mappings

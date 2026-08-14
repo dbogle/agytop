@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Windows release builds.** The `windows` target was listed in the GoReleaser
+  configuration but had never compiled: process supervision depends on POSIX
+  detached process groups (`Setsid`), `syscall.Kill`, and `/proc`. Releases are
+  now Linux and macOS only. Windows support is tracked as a future port rather
+  than shipped as a broken artifact.
+
+### Fixed
+- **`--version` reported `v0.1.0` in every released binary.** `AppVersion` was
+  declared as a `const`, and the linker's `-X` flag can only patch string
+  variables, so GoReleaser's version injection was silently a no-op.
+- **`go vet ./...` failed with 8 copylocks errors.** Snapshots of sidecar state
+  carried a copy of the live `sync.RWMutex` across the supervisor/UI boundary.
+  Snapshots are now a distinct mutex-free `supervisor.StateView` type, making
+  the copy semantics explicit and the value-passing safe by construction.
+
+### Added
+- CI now enforces `go vet ./...` on every matrix leg and `gofmt -s -l .` on one,
+  closing the gap that let the above two defects reach `main`.
+- First tests for `internal/ui`, covering view rendering, both modal renderers,
+  keybinding routing, and the `GetRunStats` zero-run branch.
+
 ---
 
 ## [0.1.0] - 2026-08-14
