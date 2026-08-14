@@ -21,6 +21,7 @@ type Supervisor struct {
 	mu       sync.RWMutex
 	sidecars map[string]*SidecarState
 	order    []string
+	registry *Registry
 	stopChan chan struct{}
 }
 
@@ -29,6 +30,7 @@ func NewSupervisor(configs []config.SidecarConfig) *Supervisor {
 	sup := &Supervisor{
 		sidecars: make(map[string]*SidecarState),
 		order:    make([]string, 0, len(configs)),
+		registry: NewRegistry(),
 		stopChan: make(chan struct{}),
 	}
 
@@ -36,10 +38,50 @@ func NewSupervisor(configs []config.SidecarConfig) *Supervisor {
 		sup.AddOrUpdate(cfg)
 	}
 
+	// Re-attach to any sidecars running detached in the background
+	sup.reAttachRunningSidecars()
+
 	// Start background metrics poller
 	go sup.metricsLoop()
 
 	return sup
+}
+
+// reAttachRunningSidecars inspects state.json and reconnects to live detached PIDs
+func (s *Supervisor) reAttachRunningSidecars() {
+	persisted, err := s.registry.Load()
+	if err != nil || len(persisted) == 0 {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for id, record := range persisted {
+		state, ok := s.sidecars[id]
+		if !ok {
+			continue
+		}
+
+		if record.PID > 0 && IsPIDAlive(record.PID) {
+			state.mu.Lock()
+			state.Status = StatusRunning
+			state.PID = record.PID
+			state.StartedAt = record.StartedAt
+			state.stopChan = make(chan struct{})
+			state.mu.Unlock()
+
+			state.AddLog(SourceSupervisor, fmt.Sprintf("Re-attached to running detached sidecar (PID %d).", record.PID))
+
+			// Resume live log tailing
+			if record.LogFile != "" {
+				go TailFile(record.LogFile, state, state.stopChan)
+			}
+		} else {
+			// Stale entry in registry, clean up
+			_ = s.registry.UpdateState(record, true)
+		}
+	}
 }
 
 // AddOrUpdate registers or updates a sidecar configuration
@@ -133,22 +175,27 @@ func (s *Supervisor) Stop(id string) error {
 	}
 
 	state.mu.Lock()
-	if state.Status != StatusRunning && state.Status != StatusBackoff && state.Status != StatusScheduled && state.Status != StatusExecuting {
+	pid := state.PID
+	cmd := state.cmd
+	if state.Status != StatusRunning && state.Status != StatusBackoff && state.Status != StatusScheduled && state.Status != StatusExecuting && pid == 0 {
 		state.mu.Unlock()
 		return nil
 	}
 
 	close(state.stopChan)
-	cmd := state.cmd
 	if state.cancelFunc != nil {
 		state.cancelFunc()
 	}
 	state.mu.Unlock()
 
-	state.AddLog(SourceSupervisor, "Stopping process...")
+	state.AddLog(SourceSupervisor, fmt.Sprintf("Stopping sidecar (PID %d)...", pid))
+	if pid > 0 {
+		_ = TerminatePID(pid)
+	}
 	if cmd != nil {
 		_ = killProcessGroup(cmd)
 	}
+	_ = s.registry.UpdateState(PersistedState{ID: id}, true)
 
 	state.mu.Lock()
 	state.Status = StatusStopped
@@ -505,7 +552,7 @@ func (s *Supervisor) TriggerScheduledWithSource(id string, triggerType RunTrigge
 	return nil
 }
 
-// runProcessLoop executes a standard command and handles restart policies
+// runProcessLoop executes a standard command as a detached background daemon
 func (s *Supervisor) runProcessLoop(state *SidecarState) {
 	cfg := state.Config
 	backoff := 500 * time.Millisecond
@@ -518,14 +565,23 @@ func (s *Supervisor) runProcessLoop(state *SidecarState) {
 		default:
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
-		state.mu.Lock()
-		state.cancelFunc = cancel
-		state.mu.Unlock()
+		logPath := s.registry.GetLogPath(cfg.ID)
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			state.mu.Lock()
+			state.Status = StatusFailed
+			state.LastError = fmt.Sprintf("Failed to open log file '%s': %v", logPath, err)
+			state.mu.Unlock()
+			state.AddLog(SourceSupervisor, state.LastError)
+			return
+		}
 
-		cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+		cmd := exec.Command(cfg.Command, cfg.Args...)
 		cmd.Dir = cfg.EffectiveWorkingDir()
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		// Start in its own detached session (POSIX Setsid)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
 
 		// Inject environment
 		cmd.Env = os.Environ()
@@ -533,19 +589,8 @@ func (s *Supervisor) runProcessLoop(state *SidecarState) {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 		}
 
-		stdoutPipe, errOut := cmd.StdoutPipe()
-		stderrPipe, errErr := cmd.StderrPipe()
-
-		if errOut != nil || errErr != nil {
-			state.mu.Lock()
-			state.Status = StatusFailed
-			state.LastError = fmt.Sprintf("Pipe error: %v", errOut)
-			state.mu.Unlock()
-			state.AddLog(SourceSupervisor, state.LastError)
-			return
-		}
-
 		if err := cmd.Start(); err != nil {
+			_ = logFile.Close()
 			state.mu.Lock()
 			state.Status = StatusFailed
 			state.LastError = fmt.Sprintf("Failed to start '%s': %v", cfg.Command, err)
@@ -554,28 +599,36 @@ func (s *Supervisor) runProcessLoop(state *SidecarState) {
 			return
 		}
 
+		pid := cmd.Process.Pid
+		startedAt := time.Now()
+
 		state.mu.Lock()
 		state.cmd = cmd
-		state.PID = cmd.Process.Pid
-		state.StartedAt = time.Now()
+		state.PID = pid
+		state.StartedAt = startedAt
 		state.Status = StatusRunning
 		state.mu.Unlock()
 
-		state.AddLog(SourceSupervisor, fmt.Sprintf("Process started with PID %d", state.PID))
+		_ = s.registry.UpdateState(PersistedState{
+			ID:         cfg.ID,
+			PID:        pid,
+			Status:     string(StatusRunning),
+			StartedAt:  startedAt,
+			LogFile:    logPath,
+			Command:    cfg.Command,
+			Args:       cfg.Args,
+			WorkingDir: cfg.WorkingDir,
+			Schedule:   cfg.Schedule,
+		}, false)
 
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			pipeStream(stdoutPipe, SourceStdout, state)
-		}()
-		go func() {
-			defer wg.Done()
-			pipeStream(stderrPipe, SourceStderr, state)
-		}()
+		state.AddLog(SourceSupervisor, fmt.Sprintf("Process started detached with PID %d (logging to %s)", pid, filepath.Base(logPath)))
 
-		wg.Wait()
+		// Start background log tailer for the UI
+		go TailFile(logPath, state, state.stopChan)
+
+		// Wait for process to exit
 		waitErr := cmd.Wait()
+		_ = logFile.Close()
 
 		exitCode := 0
 		if waitErr != nil {
@@ -592,10 +645,15 @@ func (s *Supervisor) runProcessLoop(state *SidecarState) {
 		state.PID = 0
 		state.CPUPercent = 0
 		state.MemoryBytes = 0
+		state.cmd = nil
+		state.mu.Unlock()
+
+		_ = s.registry.UpdateState(PersistedState{ID: cfg.ID}, true)
 
 		// Check if stop requested
 		select {
 		case <-state.stopChan:
+			state.mu.Lock()
 			state.Status = StatusStopped
 			state.mu.Unlock()
 			return
@@ -616,6 +674,7 @@ func (s *Supervisor) runProcessLoop(state *SidecarState) {
 		}
 
 		if !shouldRestart {
+			state.mu.Lock()
 			if exitCode != 0 {
 				state.Status = StatusFailed
 				state.LastError = fmt.Sprintf("Process exited with code %d", exitCode)
@@ -627,6 +686,7 @@ func (s *Supervisor) runProcessLoop(state *SidecarState) {
 			return
 		}
 
+		state.mu.Lock()
 		state.Restarts++
 		state.Status = StatusBackoff
 		state.mu.Unlock()
@@ -695,8 +755,14 @@ func (s *Supervisor) metricsLoop() {
 	}
 }
 
-// Shutdown stops all running sidecars and supervisor routines
+// Shutdown detaches the supervisor from sidecars and stops background tickers
+// Running detached background processes are NOT terminated so they persist in the OS
 func (s *Supervisor) Shutdown() {
+	close(s.stopChan)
+}
+
+// ShutdownAndStopAll terminates all running sidecars and shuts down the supervisor
+func (s *Supervisor) ShutdownAndStopAll() {
 	close(s.stopChan)
 	s.mu.RLock()
 	defer s.mu.RUnlock()

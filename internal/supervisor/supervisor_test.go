@@ -227,3 +227,71 @@ func TestSupervisorRunHistoryAndStats(t *testing.T) {
 		t.Errorf("expected (1, 0%%, 0, 1), got (%d, %.1f%%, %d, %d)", totalF, rateF, succF, failF)
 	}
 }
+
+func TestDetachedProcessReattachment(t *testing.T) {
+	tmpDir := t.TempDir()
+	workerScript := filepath.Join(tmpDir, "detached_worker.sh")
+	scriptContent := `#!/bin/sh
+while true; do
+    echo "tick $(date)"
+    sleep 0.1
+done
+`
+	_ = os.WriteFile(workerScript, []byte(scriptContent), 0755)
+
+	cfg := config.SidecarConfig{
+		ID:            "test-detached-worker",
+		DisplayName:   "Detached Worker",
+		Command:       workerScript,
+		RestartPolicy: config.RestartNever,
+		WorkingDir:    tmpDir,
+	}
+
+	// 1. Session 1: Launch detached sidecar
+	sup1 := NewSupervisor([]config.SidecarConfig{cfg})
+	if err := sup1.Start("test-detached-worker"); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	st1, ok := sup1.GetState("test-detached-worker")
+	if !ok || st1.Status != StatusRunning || st1.PID <= 0 {
+		t.Fatalf("expected running detached worker with PID > 0, got status %s, PID %d", st1.Status, st1.PID)
+	}
+	pid := st1.PID
+
+	// Verify process is alive in OS
+	if !IsPIDAlive(pid) {
+		t.Fatalf("PID %d is not alive in OS", pid)
+	}
+
+	// 2. Session 1 Exits (Detach without killing)
+	sup1.Shutdown()
+
+	// Verify PID is STILL alive in the OS even after sup1 shutdown!
+	if !IsPIDAlive(pid) {
+		t.Fatalf("PID %d should still be alive after sup1.Shutdown()", pid)
+	}
+
+	// 3. Session 2: Launch a new supervisor session and re-attach
+	sup2 := NewSupervisor([]config.SidecarConfig{cfg})
+	defer sup2.ShutdownAndStopAll()
+
+	st2, ok := sup2.GetState("test-detached-worker")
+	if !ok {
+		t.Fatalf("could not get state from sup2")
+	}
+	if st2.Status != StatusRunning {
+		t.Errorf("expected sup2 to re-attach with status RUNNING, got %s", st2.Status)
+	}
+	if st2.PID != pid {
+		t.Errorf("expected sup2 to have PID %d, got %d", pid, st2.PID)
+	}
+
+	// Clean up process
+	_ = sup2.Stop("test-detached-worker")
+	time.Sleep(100 * time.Millisecond)
+	if IsPIDAlive(pid) {
+		_ = TerminatePID(pid)
+	}
+}

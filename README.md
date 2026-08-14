@@ -19,6 +19,10 @@
     * **Global User**: `~/.gemini/config/sidecars/`
     * **Plugins**: `~/.gemini/config/plugins/*/sidecars/`
     * **Custom Paths**: Passed via `-c` / `--config` flag.
+* **Detached Process Execution & State Persistence**:
+  * Sidecars run as independent, detached background daemons (`Setsid: true`) in their own OS session.
+  * Closing or restarting the TUI does **not** interrupt background sidecars.
+  * Automatically re-attaches to live background PIDs from `~/.agytop/state.json` with continuous logging to `~/.agytop/logs/<id>.log`.
 * **Continuous Daemons vs. Scheduled Tasks**:
   * Explicitly differentiates between continuous daemons (`[RUNNING]`, `[STOPPED]`) and cron-scheduled tasks (`[SCHEDULED]`, `[EXECUTING]`).
   * Live ASCII telemetry gauges for CPU and RSS Memory utilization.
