@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"antigravity-sidecars/internal/config"
+	"agytop/internal/config"
 )
 
 // Supervisor coordinates multiple sidecar lifecycles

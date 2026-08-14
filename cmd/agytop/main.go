@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"antigravity-sidecars/internal/config"
-	"antigravity-sidecars/internal/supervisor"
-	"antigravity-sidecars/internal/ui"
+	"agytop/internal/config"
+	"agytop/internal/supervisor"
+	"agytop/internal/ui"
 )
 
 const AppVersion = "v2.0.0"
@@ -36,8 +36,8 @@ func main() {
 	flag.BoolVar(&listOnly, "l", false, "List (shorthand)")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Google Antigravity 2.0 Sidecar Monitor (%s)\n", AppVersion)
-		fmt.Fprintf(os.Stderr, "Usage: agy-sidecars [options]\n\n")
+		fmt.Fprintf(os.Stderr, "agytop %s - Google Antigravity 2.0 Sidecar Supervisor & TUI\n", AppVersion)
+		fmt.Fprintf(os.Stderr, "Usage: agytop [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}
@@ -45,7 +45,7 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("agy-sidecars %s (Google Antigravity 2.0)\n", AppVersion)
+		fmt.Printf("agytop %s (Google Antigravity 2.0)\n", AppVersion)
 		os.Exit(0)
 	}
 

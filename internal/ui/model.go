@@ -11,8 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"antigravity-sidecars/internal/config"
-	"antigravity-sidecars/internal/supervisor"
+	"agytop/internal/config"
+	"agytop/internal/supervisor"
 )
 
 type tickMsg time.Time

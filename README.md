@@ -1,55 +1,58 @@
-# Google Antigravity 2.0 Sidecar Supervisor & TUI (`agy-sidecars`)
+# agytop ⚡
 
-An interactive Terminal User Interface (TUI) and supervisor designed for monitoring and controlling **Google Antigravity 2.0 Sidecars**.
+> **Interactive Terminal Resource Monitor & Supervisor for Google Antigravity 2.0 Sidecars.**
 
-Built in **Go** using [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](https://github.com/charmbracelet/lipgloss), and [Bubbles](https://github.com/charmbracelet/bubbles).
+`agytop` is a high-fidelity Terminal User Interface (TUI) built in **Go** using [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](https://github.com/charmbracelet/lipgloss), and [Bubbles](https://github.com/charmbracelet/bubbles).
 
 ---
 
-## 🌟 Features
+## 🌟 Key Features
 
 * **Multi-Scope Discovery Engine**:
   * Automatically detects sidecars in:
     * **Workspace Project**: `.agents/sidecars/` & `_agents/sidecars/`
     * **Global User**: `~/.gemini/config/sidecars/`
     * **Plugins**: `~/.gemini/config/plugins/*/sidecars/`
-    * **Custom paths**: Passed via `-c` / `--config` flag.
-* **Process Lifecycle Supervision**:
-  * Start, Stop, and Restart sidecar processes.
-  * Real-time metrics: Process ID (PID), CPU usage %, RSS memory footprint, and live uptime.
-  * Restart policies: `always`, `on-failure`, and `never` with exponential backoff handling.
-  * Builtin `schedule` (cron) support with next-run and last-run indicators.
-* **⚡ Dry-Run Probe & Diagnostics (`d` key)**:
+    * **Custom Paths**: Passed via `-c` / `--config` flag.
+* **Continuous Daemons vs. Scheduled Tasks**:
+  * Explicitly differentiates between continuous daemons (`[RUNNING]`, `[STOPPED]`) and cron-scheduled tasks (`[SCHEDULED]`, `[EXECUTING]`).
+  * Live ASCII telemetry gauges for CPU and RSS Memory utilization.
+  * Automatic restart handling (`always`, `on-failure`, `never`) with exponential backoff.
+* **⚡ Dry-Run Diagnostics Engine (`d` key)**:
   * Performs isolated, non-destructive validation of sidecar configurations.
   * Injects `AGY_DRY_RUN=1`, `DRY_RUN=true`, and `ANTIGRAVITY_SIDECAR_DRY_RUN=1`.
-  * Verifies binary existence in `PATH`, directory permissions, syntax check, and captures probe output into a dedicated diagnostics modal.
-* **Live Streaming Output**:
-  * Auto-scrolling, color-coded log viewer (`[stdout]`, `[stderr]`, `[system]`, `[dryrun]`).
-  * Follow mode toggle (`a`), fullscreen log maximize (`l`), and clear buffer (`c`).
-* **Search & Filtering**:
-  * Interactive instant fuzzy/prefix search (`/`) across names, scopes, commands, and health statuses.
+  * Validates binary paths, directory permissions, syntax, and generates simulated cron timelines.
+* **Real-time Log Streaming**:
+  * Color-coded tags (`[PROCESS]`, `[STDERR]`, `[SYSTEM]`, `[DRY-RUN]`) with timestamps.
+  * Auto-scroll follow mode (`a`), full-screen log maximize (`l`), and log buffer reset (`c`).
+* **Search & Filtering (`/`)**:
+  * Real-time fuzzy filtering across sidecar IDs, display names, scopes, and health statuses.
 
 ---
 
-## 🚀 Quickstart
+## 🚀 Installation & Quickstart
 
-### 1. Build and Run
+### Build from source
 
 ```bash
-# Build the binary
-go build -o bin/agy-sidecars ./cmd/agy-sidecars
+# Clone repository
+git clone https://github.com/dbogle/agytop.git
+cd agytop
 
-# Launch the interactive TUI
-./bin/agy-sidecars
+# Build binary
+go build -o bin/agytop ./cmd/agytop
 
-# Or launch with sample demonstration sidecars
-./bin/agy-sidecars --demo
+# Launch interactive TUI
+./bin/agytop
+
+# Launch with built-in demonstration suite
+./bin/agytop --demo
 ```
 
-### 2. CLI Options
+### CLI Subcommands & Flags
 
 ```
-Usage: agy-sidecars [options]
+Usage: agytop [options]
 
 Options:
   -c, --config string    Custom path to sidecar.json or directory containing sidecars
@@ -63,30 +66,31 @@ Options:
 
 ## ⌨️ Keybindings
 
-| Keybinding | Action |
+| Key | Action |
 | :--- | :--- |
-| `↑` / `k`, `↓` / `j` | Navigate sidecars in list |
-| `Tab` / `Shift+Tab` | Cycle focus across Panes (Sidecars List, Inspector, Logs) |
-| **`s`** | **Start** selected sidecar |
-| **`x`** | **Stop / Terminate** selected sidecar |
-| **`r`** | **Restart** selected sidecar |
-| **`d`** | **Trigger Dry-Run Diagnostics** (opens modal) |
-| **`t`** | **Trigger Immediate Run** (for scheduled / cron sidecars) |
-| **`v`** | **View Raw `sidecar.json`** configuration |
+| `↑` / `k`, `↓` / `j` | Navigate sidecar list |
+| `Tab` / `Shift+Tab` | Cycle focus between List, Inspector, and Logs |
+| **`s`** | **Start** daemon or **Arm** scheduled cron timer |
+| **`x`** | **Stop / Terminate** active process |
+| **`r`** | **Restart** active process |
+| **`d`** | **Trigger Dry-Run Diagnostics Modal** |
+| **`t`** | **Trigger Immediate Execution** (for scheduled sidecars) |
+| **`v`** | **View Raw `sidecar.json`** definition |
 | **`/`** | **Filter & Search** sidecars |
 | `l` | Toggle maximized full-screen log stream |
 | `a` | Toggle log auto-scroll (Follow mode) |
 | `c` | Clear log buffer for selected sidecar |
 | `?` / `h` | Open **Help Cheat Sheet** |
 | `Esc` | Close modal / clear search filter |
-| `q` / `Ctrl+C` | Quit |
+| `q` / `Ctrl+C` | Shutdown supervisor & Quit |
 
 ---
 
 ## 📋 Sidecar Configuration Specification (`sidecar.json`)
 
-Place `sidecar.json` in your workspace (`.agents/sidecars/<name>/sidecar.json`) or global folder (`~/.gemini/config/sidecars/<name>/sidecar.json`):
+Place `sidecar.json` in your workspace (`.agents/sidecars/<name>/sidecar.json`) or global directory (`~/.gemini/config/sidecars/<name>/sidecar.json`):
 
+### Continuous Daemon:
 ```json
 {
   "display_name": "Codebase Embeddings Indexer",
@@ -102,8 +106,7 @@ Place `sidecar.json` in your workspace (`.agents/sidecars/<name>/sidecar.json`) 
 }
 ```
 
-For scheduled cron tasks:
-
+### Scheduled Cron Task:
 ```json
 {
   "display_name": "Nightly Health Reporter",

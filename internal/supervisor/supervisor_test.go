@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"antigravity-sidecars/internal/config"
+	"agytop/internal/config"
 )
 
 func TestSupervisorLifecycleAndDryRun(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"antigravity-sidecars/internal/supervisor"
+	"agytop/internal/supervisor"
 )
 
 // RenderDryRunModal formats the dry-run diagnostics dialog with the Stitch design system

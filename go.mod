@@ -1,4 +1,4 @@
-module antigravity-sidecars
+module agytop
 
 go 1.22.6
 

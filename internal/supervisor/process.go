@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"antigravity-sidecars/internal/config"
+	"agytop/internal/config"
 )
 
 // ProcessStatus represents the current lifecycle status of a sidecar
