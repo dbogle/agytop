@@ -47,47 +47,67 @@ func NewSupervisor(configs []config.SidecarConfig) *Supervisor {
 	return sup
 }
 
-// reAttachRunningSidecars inspects state.json and reconnects to live detached PIDs
+// reAttachRunningSidecars inspects state.json and reconnects to live detached
+// PIDs. Records with no matching currently-discovered sidecar are surfaced as
+// orphaned entries (rather than silently dropped) so a live process is never
+// left both invisible and unstoppable; genuinely dead entries are pruned.
 func (s *Supervisor) reAttachRunningSidecars() {
 	persisted, err := s.registry.Load()
 	if err != nil || len(persisted) == 0 {
 		return
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	for id, record := range persisted {
-		state, ok := s.sidecars[id]
-		if !ok {
+		if record.PID <= 0 || !IsPIDAlive(record.PID) {
+			// Stale entry in registry, clean up
+			_ = s.registry.UpdateState(record, true)
 			continue
 		}
 
-		if record.PID > 0 && IsPIDAlive(record.PID) {
-			state.mu.Lock()
-			state.Status = StatusRunning
-			state.PID = record.PID
-			state.StartedAt = record.StartedAt
-			state.stopChan = make(chan struct{})
-			stopChan := state.stopChan
-			state.mu.Unlock()
-
-			state.AddLog(SourceSupervisor, fmt.Sprintf("Re-attached to running detached sidecar (PID %d).", record.PID))
-
-			// Resume live log tailing
-			if record.LogFile != "" {
-				go TailFile(record.LogFile, state, stopChan)
+		state, ok := s.sidecars[id]
+		if !ok {
+			// No sidecar.json currently matches this ID (renamed/removed or
+			// discovery scope changed), but its detached process is still
+			// alive. Synthesize a minimal entry so it stays visible and
+			// stoppable instead of leaking silently in state.json.
+			cfg := config.SidecarConfig{
+				ID:            record.ID,
+				DisplayName:   fmt.Sprintf("%s (orphaned)", record.ID),
+				Description:   "No matching sidecar.json found; reattached from a previous session.",
+				Command:       record.Command,
+				Args:          record.Args,
+				Directory:     record.WorkingDir,
+				Schedule:      record.Schedule,
+				RestartPolicy: config.RestartNever,
 			}
-
-			// We don't own this process's *exec.Cmd (it wasn't started by
-			// this instance), so cmd.Wait() isn't available; poll liveness
-			// instead so a crash after reattach is still detected and
-			// restart policy applied.
-			go s.watchReattachedProcess(state, record.PID, stopChan)
-		} else {
-			// Stale entry in registry, clean up
-			_ = s.registry.UpdateState(record, true)
+			state = NewSidecarState(cfg)
+			s.sidecars[id] = state
+			s.order = append(s.order, id)
 		}
+
+		state.mu.Lock()
+		state.Status = StatusRunning
+		state.PID = record.PID
+		state.StartedAt = record.StartedAt
+		state.stopChan = make(chan struct{})
+		stopChan := state.stopChan
+		state.mu.Unlock()
+
+		state.AddLog(SourceSupervisor, fmt.Sprintf("Re-attached to running detached sidecar (PID %d).", record.PID))
+
+		// Resume live log tailing
+		if record.LogFile != "" {
+			go TailFile(record.LogFile, state, stopChan)
+		}
+
+		// We don't own this process's *exec.Cmd (it wasn't started by
+		// this instance), so cmd.Wait() isn't available; poll liveness
+		// instead so a crash after reattach is still detected and
+		// restart policy applied.
+		go s.watchReattachedProcess(state, record.PID, stopChan)
 	}
 }
 
