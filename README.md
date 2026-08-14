@@ -1,5 +1,10 @@
 # agytop ⚡
 
+[![CI](https://github.com/dbogle/agytop/actions/workflows/ci.yml/badge.svg)](https://github.com/dbogle/agytop/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg)](LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/dbogle/agytop)](go.mod)
+[![Release](https://img.shields.io/github/v/release/dbogle/agytop?include_prereleases&color=blue)](https://github.com/dbogle/agytop/releases)
+
 > **Interactive Terminal Resource Monitor & Supervisor for Google Antigravity 2.0 Sidecars.**
 
 `agytop` is a high-fidelity Terminal User Interface (TUI) built in **Go** using [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](https://github.com/charmbracelet/lipgloss), and [Bubbles](https://github.com/charmbracelet/bubbles).

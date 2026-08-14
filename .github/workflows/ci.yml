@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test & Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+        go-version: [ '1.22.x', '1.23.x' ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run unit tests with Race Detector
+        run: go test -v -race ./...
+
+      - name: Build agytop binary
+        run: go build -v -o bin/agytop ./cmd/agytop
+
+      - name: Test binary execution
+        run: |
+          ./bin/agytop --version
+          ./bin/agytop --demo --list
