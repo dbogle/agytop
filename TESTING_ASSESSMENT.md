@@ -23,9 +23,9 @@ The absence of tests at those layers is not only a coverage statistic. Because C
 ```
                           AUDITED (e515fd2)      AFTER PHASE 0
 Total Production Code :   3,470 lines            3,500 lines
-Total Test Code       :     374 lines              545 lines
-Code-to-Test Ratio    :    ~10:1                   ~6.4:1
-Total Statement Cov.  :    36.1%                   55.3%
+Total Test Code       :     374 lines              765 lines
+Code-to-Test Ratio    :    ~10:1                   ~4.6:1
+Total Statement Cov.  :    36.1%                   56.6%
 ```
 
 ### Live Defects Found During This Audit
@@ -46,10 +46,10 @@ Coverage as audited at `e515fd2`, alongside the current figure after Phase 0. Th
 | Package / Module | Prod Lines | Test Lines | Audited | Now | Health Rating | Key Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | [`internal/config`](file:///home/larry/repos/agytop/internal/config/config.go) | 202 | 76 | 77.6% | **77.6%** | 🟡 Moderate | Unchanged. Basic happy-path parsing; missing scope precedence & error branches. |
-| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,575 | 298 | 65.1% | **64.3%** | 🟢 Good Baseline | Slight dip: `GetLogs`/`ClearLogs`/`GetRunHistory` lost their last callers in the `StateView` refactor and are now uncovered dead code (see [§7.2](#72-findings-surfaced-by-the-remediation)). |
-| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,486 | 126 | 0.0% | **48.0%** | 🟡 Moderate | `stateview_test.go` added as the D2 guard: view rendering, both modals, key routing, `GetRunStats`. Sparklines, gauges, search, and resize still untested. |
+| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,572 | 418 | 65.1% | **66.0%** | 🟢 Good Baseline | Dead `GetLogs`/`GetRunHistory` removed; `ClearLogs` wired to a new `Supervisor.ClearLogs(id)` and covered by both a unit test and a live-tailer test. |
+| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,490 | 172 | 0.0% | **48.1%** | 🟡 Moderate | `stateview_test.go` added as the D2 guard: view rendering, both modals, key routing, `GetRunStats`, and the `c`-key live-clear guard. Sparklines, gauges, search, and resize still untested. |
 | [`cmd/agytop`](file:///home/larry/repos/agytop/cmd/agytop/main.go) | 237 | 45 | 0.0% | **0.0%** | 🔴 Critical Gap | Has a test now (the D4 guard), but it `exec`s a built binary, so the coverage instrument cannot see the subprocess. Real coverage > 0; the number will stay 0 until in-process tests exist. |
-| **Total / Repository** | **3,500** | **545** | 36.1% | **55.3%** | 🟡 Overall | Ratio improved ~10:1 → ~6.4:1. Substantial surface area still untested. |
+| **Total / Repository** | **3,500** | **765** | 36.1% | **56.6%** | 🟡 Overall | Ratio improved ~10:1 → ~4.6:1. Substantial surface area still untested. |
 
 ---
 
@@ -804,6 +804,18 @@ All four audit defects are fixed in the working tree. This section records what 
 
 The `*SidecarState` live type is unchanged — it keeps its mutex and all its locking methods. Only the value-returning API moved to `StateView`.
 
+Two follow-on changes address the findings the remediation itself surfaced ([§7.2](#72-findings-surfaced-by-the-remediation)):
+
+| File | Change |
+| :--- | :--- |
+| `internal/supervisor/supervisor.go` | Added `ClearLogs(id string) error`, matching `Stop`'s lookup-and-error shape. **Finding 1** |
+| `internal/supervisor/process.go` | Deleted the dead `GetLogs()` and `GetRunHistory()`; kept `ClearLogs()`. **Finding 2** |
+| `internal/ui/model.go` | `c` handler now calls the supervisor and refreshes on success; surfaces errors in the notification. **Finding 1** |
+| `internal/supervisor/supervisor_test.go` | `TestSupervisorClearLogs` — clears live state, and asserts an unknown id errors. |
+| `internal/supervisor/clearlogs_test.go` | New. `TestClearLogsDoesNotResurrectTailedLines` — the live-tailer concurrency guard. |
+| `internal/ui/stateview_test.go` | `TestClearLogsKeyClearsLiveState` — the `c`-key regression guard. |
+| `CHANGELOG.md` | `Fixed` entry for the `c` keybinding. |
+
 ### 7.2. Findings Surfaced by the Remediation
 
 **1. The `c` (clear logs) keybinding has never worked.** This is a pre-existing bug at `e515fd2`, not a regression, and it was confirmed against the committed original rather than inferred:
@@ -812,9 +824,17 @@ The `*SidecarState` live type is unchanged — it keeps its mutex and all its lo
 * `m.filteredStates` derives from `m.sidecars`, assigned from `GetAllStates()`, which returns `Snapshot()` copies.
 * So `cur.ClearLogs()` locked the snapshot's own zero-value mutex and cleared the snapshot's `Logs` slice. The live buffer was untouched, and the next 200ms `tickMsg` replaced the whole slice with fresh snapshots.
 
-Net effect: pressing `c` shows its "Cleared logs" notification and clears the pane for at most one frame, then the logs reappear. The refactor preserved this behavior exactly (`cur.Logs = make(...)`) rather than silently changing it. **Fixing it properly requires a `Supervisor.ClearLogs(id)` that reaches the live state — a behavior change, so it is left for a deliberate decision rather than folded into a vet cleanup.**
+Net effect: pressing `c` shows its "Cleared logs" notification and clears the pane for at most one frame, then the logs reappear. The refactor preserved this behavior exactly (`cur.Logs = make(...)`) rather than silently changing it.
 
-**2. Three methods on `*SidecarState` are now dead code.** `GetLogs()`, `ClearLogs()`, and `GetRunHistory()` have zero call sites repo-wide, because the UI was their only consumer and it now reads `StateView` fields directly. This accounts for the `internal/supervisor` dip from 65.1% to 64.3%. `ClearLogs()` being orphaned is the structural evidence for finding 1 — the method that *would* clear live state exists, and nothing calls it. Recommend deleting `GetLogs`/`GetRunHistory`, and keeping `ClearLogs` only if finding 1 is fixed by wiring it up.
+> **✅ Fixed** (as a deliberate follow-up, not folded into the vet cleanup). `Supervisor.ClearLogs(id) error` now reaches the live `*SidecarState`, following `Stop`'s exact lookup-and-error shape and releasing the supervisor lock before taking the per-state lock. The UI calls it synchronously — unlike `Stop`/`Restart` it only takes a mutex and reallocates a slice, so it does not need the `tea.Cmd` treatment — then refreshes so the pane empties immediately instead of waiting up to 200ms.
+>
+> **The on-disk log file is deliberately untouched.** `~/.agytop/logs/<id>.log` is followed by `TailFile`, which reads its tail once and then only ever pushes forward from its own offset; truncating the file would fight that offset and destroy user data. Clearing is in-memory only, which is what the "Cleared logs" notification has always meant.
+>
+> Two guards cover it. `TestClearLogsKeyClearsLiveState` (`internal/ui`) presses `c` through `Model.Update` and asserts via the supervisor — not the model's own copy — that the live buffer is empty; it was confirmed to **fail against the old one-line handler** with 4 surviving entries. `TestClearLogsDoesNotResurrectTailedLines` (`internal/supervisor`) covers the live concurrency case that code reading cannot settle: it starts a daemon emitting monotonically numbered lines, clears mid-stream, and asserts every surviving line is newer than the pre-clear high-water mark. Asserting on line *identity* rather than entry counts keeps it deterministic on fast machines; it was run 5× under `-race` with a clean separation (before: through `line-34`; after: `lines 35..68`).
+
+**2. Three methods on `*SidecarState` are now dead code.** `GetLogs()`, `ClearLogs()`, and `GetRunHistory()` have zero call sites repo-wide, because the UI was their only consumer and it now reads `StateView` fields directly. `ClearLogs()` being orphaned is the structural evidence for finding 1 — the method that *would* clear live state exists, and nothing calls it. Recommend deleting `GetLogs`/`GetRunHistory`, and keeping `ClearLogs` only if finding 1 is fixed by wiring it up.
+
+> **✅ Resolved.** `GetLogs()` and `GetRunHistory()` are deleted. `ClearLogs()` is kept — finding 1's fix gave it its caller back through `Supervisor.ClearLogs(id)`. With the new tests, `internal/supervisor` moved from 64.3% up to 66.0%, above where the audit found it.
 
 **3. `cmd/agytop` still reports 0.0% coverage despite now having a test.** `TestCLIVersionReflectsLdflags` builds and `exec`s a binary, and the coverage instrument cannot see into a subprocess. Real behavioral coverage is non-zero. This matters for the Phase 3 gate design in §5: a per-package floor on `cmd/agytop` would be unsatisfiable by subprocess-style CLI tests, so that package should be exempt or measured differently.
 
@@ -826,10 +846,10 @@ Re-run from a clean test cache rather than taken from the implementation report:
 $ gofmt -s -l .                       # (no output)
 $ go vet ./...                        # exit 0
 $ go clean -testcache && go test -race ./...
-ok      agytop/cmd/agytop           1.166s
-ok      agytop/internal/config      1.011s
-ok      agytop/internal/supervisor  2.568s
-ok      agytop/internal/ui          1.039s
+ok      agytop/cmd/agytop           1.159s
+ok      agytop/internal/config      1.010s
+ok      agytop/internal/supervisor  3.479s
+ok      agytop/internal/ui          1.042s
 
 $ go build -ldflags "-X main.AppVersion=v9.9.9-check" -o /tmp/av ./cmd/agytop
 $ /tmp/av --version
@@ -840,8 +860,18 @@ $ grep -n windows .goreleaser.yaml    # no match
 
 `GOOS=windows go build ./...` still fails, which is now the expected state — see [§3.3.2](#332-windows-portability--currently-broken-d1).
 
-Two checks went beyond the implementation report. The `c`-keybinding claim was verified against `git show HEAD:internal/ui/model.go` to establish it was pre-existing rather than introduced. And because `internal/ui` had no tests at all, the `StateView` retyping was validated by behavior rather than by compilation alone — `internal/ui/stateview_test.go` was written for exactly that purpose and is now merged as the D2 guard.
+Several checks went beyond the implementation reports:
+
+* The `c`-keybinding bug was verified against `git show HEAD:internal/ui/model.go` to establish it was pre-existing rather than introduced by the `StateView` refactor.
+* Because `internal/ui` had no tests at all, the `StateView` retyping was validated by behavior rather than compilation alone — `internal/ui/stateview_test.go` was written for that purpose and merged as the D2 guard.
+* The `c`-key regression guard was confirmed to actually fail against the old handler by reverting just that handler in a scratch copy and re-running: `expected live supervisor state logs to be empty after 'c', got 4 entries`. A guard that cannot fail is not a guard.
+* The claim that clearing is safe against a live `TailFile` was tested rather than reasoned about, via `TestClearLogsDoesNotResurrectTailedLines`, and run 5× under `-race` to check for flakiness before merging.
+* Test daemons were confirmed not to leak: no `bash` process from the tailer test survives `t.Cleanup(sup.Shutdown)`, which matters because sidecars launch detached with `Setsid`.
 
 ### 7.4. Still Outstanding
 
-Phase 0 only. Phases 1–3 are untouched: the `readLastLines` 0-byte bug, the testability seams in [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written), restart-policy and backoff tests, sparkline and gauge tests, `FormatBytes`, config scope precedence, the `time.Sleep` conversion, the concurrency test in [§4.2](#42--race-only-covers-paths-that-actually-execute), and the coverage-gate design.
+Phase 0 and its two follow-on findings only. Phases 1–3 are untouched: the `readLastLines` 0-byte bug, the testability seams in [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written), restart-policy and backoff tests, sparkline and gauge tests, `FormatBytes`, config scope precedence, the `time.Sleep` conversion in the existing supervisor tests, the snapshot-boundary concurrency test in [§4.2](#42--race-only-covers-paths-that-actually-execute), and the coverage-gate design.
+
+Finding 3 in [§7.2](#72-findings-surfaced-by-the-remediation) — `cmd/agytop` reporting 0.0% because its test `exec`s a subprocess — is unresolved by design; it is an input to the Phase 3 gate design rather than a defect to fix.
+
+One note for whoever picks up Phase 2: `internal/supervisor/clearlogs_test.go` already carries a `waitFor(t, timeout, cond, what)` polling helper written for the live-tailer test. It is the helper §4.1 recommends, so the `time.Sleep` conversion should reuse it rather than introduce a second one.
