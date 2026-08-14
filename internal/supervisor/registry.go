@@ -2,11 +2,13 @@ package supervisor
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -193,6 +195,54 @@ func TerminatePID(pid int) error {
 	return nil
 }
 
+const (
+	tailMaxLines  = 100
+	tailChunkSize = 64 * 1024
+)
+
+// readLastLines returns up to maxLines complete lines from the end of the
+// file by seeking backward in fixed-size chunks, along with the file's size
+// at read time. Unlike bufio.Scanner it has no per-line length limit and
+// never scans more of the file than it needs to.
+func readLastLines(f *os.File, maxLines int) (lines []string, size int64, err error) {
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	size = info.Size()
+
+	var data []byte
+	pos := size
+	newlineCount := 0
+
+	for pos > 0 && newlineCount <= maxLines {
+		chunkSize := int64(tailChunkSize)
+		if chunkSize > pos {
+			chunkSize = pos
+		}
+		pos -= chunkSize
+
+		buf := make([]byte, chunkSize)
+		if _, err := f.ReadAt(buf, pos); err != nil && err != io.EOF {
+			return nil, size, err
+		}
+
+		newlineCount += bytes.Count(buf, []byte{'\n'})
+		data = append(buf, data...)
+	}
+
+	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if pos > 0 && len(all) > 0 {
+		// The first entry may be a partial line continuing from before our
+		// read window; drop it since it can't be a complete line.
+		all = all[1:]
+	}
+	if len(all) > maxLines {
+		all = all[len(all)-maxLines:]
+	}
+	return all, size, nil
+}
+
 // TailFile reads recent lines and continuously tails a log file into SidecarState
 func TailFile(logPath string, state *SidecarState, stopChan <-chan struct{}) {
 	file, err := os.Open(logPath)
@@ -201,17 +251,20 @@ func TailFile(logPath string, state *SidecarState, stopChan <-chan struct{}) {
 	}
 	defer file.Close()
 
-	// Read existing lines (up to last 100 lines)
-	scanner := bufio.NewScanner(file)
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		if len(lines) > 100 {
-			lines = lines[1:]
+	lines, size, err := readLastLines(file, tailMaxLines)
+	if err == nil {
+		for _, l := range lines {
+			l = strings.TrimSuffix(l, "\r")
+			if l != "" {
+				state.AddLog(SourceStdout, l)
+			}
 		}
+	} else {
+		size = 0
 	}
-	for _, l := range lines {
-		state.AddLog(SourceStdout, l)
+
+	if _, err := file.Seek(size, io.SeekStart); err != nil {
+		return
 	}
 
 	// Tail new lines
