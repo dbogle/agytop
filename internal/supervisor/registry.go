@@ -38,7 +38,13 @@ func NewRegistry() *Registry {
 	if err != nil {
 		home = "."
 	}
-	baseDir := filepath.Join(home, ".agytop")
+	return NewRegistryAt(filepath.Join(home, ".agytop"))
+}
+
+// NewRegistryAt creates a registry rooted at the given base directory.
+// Exposed primarily so tests can point it at a temp dir instead of the
+// user's real ~/.agytop.
+func NewRegistryAt(baseDir string) *Registry {
 	logsDir := filepath.Join(baseDir, "logs")
 	_ = os.MkdirAll(logsDir, 0755)
 

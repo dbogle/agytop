@@ -27,10 +27,17 @@ type Supervisor struct {
 
 // NewSupervisor creates a supervisor from sidecar configurations
 func NewSupervisor(configs []config.SidecarConfig) *Supervisor {
+	return NewSupervisorWithRegistry(configs, NewRegistry())
+}
+
+// NewSupervisorWithRegistry creates a supervisor backed by a caller-provided
+// registry. Exposed primarily so tests can inject a temp-dir-backed registry
+// instead of reading/writing the user's real ~/.agytop/state.json.
+func NewSupervisorWithRegistry(configs []config.SidecarConfig, registry *Registry) *Supervisor {
 	sup := &Supervisor{
 		sidecars: make(map[string]*SidecarState),
 		order:    make([]string, 0, len(configs)),
-		registry: NewRegistry(),
+		registry: registry,
 		stopChan: make(chan struct{}),
 	}
 

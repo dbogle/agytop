@@ -37,7 +37,7 @@ done
 		},
 	}
 
-	sup := NewSupervisor([]config.SidecarConfig{cfg})
+	sup := NewSupervisorWithRegistry([]config.SidecarConfig{cfg}, NewRegistryAt(t.TempDir()))
 	defer sup.Shutdown()
 
 	// Test 1: Dry-Run execution
@@ -113,7 +113,7 @@ exit 0
 		WorkingDir:  tmpDir,
 	}
 
-	sup := NewSupervisor([]config.SidecarConfig{cfg})
+	sup := NewSupervisorWithRegistry([]config.SidecarConfig{cfg}, NewRegistryAt(t.TempDir()))
 	defer sup.Shutdown()
 
 	state, _ := sup.GetState("test-cron")
@@ -181,7 +181,7 @@ func TestSupervisorRunHistoryAndStats(t *testing.T) {
 		WorkingDir:  tmpDir,
 	}
 
-	sup := NewSupervisor([]config.SidecarConfig{cfgSuccess, cfgFail})
+	sup := NewSupervisorWithRegistry([]config.SidecarConfig{cfgSuccess, cfgFail}, NewRegistryAt(t.TempDir()))
 	defer sup.Shutdown()
 
 	// Trigger success 2 times
@@ -248,7 +248,8 @@ done
 	}
 
 	// 1. Session 1: Launch detached sidecar
-	sup1 := NewSupervisor([]config.SidecarConfig{cfg})
+	regDir := t.TempDir()
+	sup1 := NewSupervisorWithRegistry([]config.SidecarConfig{cfg}, NewRegistryAt(regDir))
 	if err := sup1.Start("test-detached-worker"); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -274,7 +275,7 @@ done
 	}
 
 	// 3. Session 2: Launch a new supervisor session and re-attach
-	sup2 := NewSupervisor([]config.SidecarConfig{cfg})
+	sup2 := NewSupervisorWithRegistry([]config.SidecarConfig{cfg}, NewRegistryAt(regDir))
 	defer sup2.ShutdownAndStopAll()
 
 	st2, ok := sup2.GetState("test-detached-worker")
