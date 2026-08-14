@@ -203,7 +203,9 @@ const (
 // readLastLines returns up to maxLines complete lines from the end of the
 // file by seeking backward in fixed-size chunks, along with the file's size
 // at read time. Unlike bufio.Scanner it has no per-line length limit and
-// never scans more of the file than it needs to.
+// never scans more of the file than it needs to. A file with no content
+// (empty, or containing only newlines) yields a nil slice, not a slice
+// containing a single blank line.
 func readLastLines(f *os.File, maxLines int) (lines []string, size int64, err error) {
 	info, err := f.Stat()
 	if err != nil {
@@ -231,7 +233,12 @@ func readLastLines(f *os.File, maxLines int) (lines []string, size int64, err er
 		data = append(buf, data...)
 	}
 
-	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	trimmed := strings.TrimRight(string(data), "\n")
+	if trimmed == "" {
+		return nil, size, nil
+	}
+
+	all := strings.Split(trimmed, "\n")
 	if pos > 0 && len(all) > 0 {
 		// The first entry may be a partial line continuing from before our
 		// read window; drop it since it can't be a complete line.
