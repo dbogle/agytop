@@ -706,11 +706,19 @@ func (m Model) renderInspectorPane(width, height int) string {
 		memMB := float64(cur.MemoryBytes) / (1024 * 1024)
 		memGauge := renderAsciiGauge(memMB, 512.0, 12)
 
-		b.WriteString(fmt.Sprintf("CPU [%s] %5.1f%%   RAM [%s] %s   PID: %d  UPTIME: %s\n",
-			cpuGauge, cur.CPUPercent,
-			memGauge, supervisor.FormatBytes(cur.MemoryBytes),
-			cur.PID, uptime,
-		))
+		sparkWidth := width - 34
+		if sparkWidth > 40 {
+			sparkWidth = 40
+		}
+		if sparkWidth < 6 {
+			sparkWidth = 6
+		}
+		cpuSpark := renderSparkline(cur.CPUHistory, 100.0, sparkWidth)
+		memSpark := renderSparkline(uint64sToFloat64s(cur.MemHistory), 512*1024*1024, sparkWidth)
+
+		b.WriteString(fmt.Sprintf("CPU [%s] %5.1f%%  %s\n", cpuGauge, cur.CPUPercent, cpuSpark))
+		b.WriteString(fmt.Sprintf("RAM [%s] %-9s %s\n", memGauge, supervisor.FormatBytes(cur.MemoryBytes), memSpark))
+		b.WriteString(fmt.Sprintf("PID: %d  UPTIME: %s\n", cur.PID, uptime))
 	} else if cur.Status == supervisor.StatusFailed {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorDanger).Render(fmt.Sprintf("FAILURE: %s (Exit Code: %d, Restarts: %d)\n", cur.LastError, cur.LastExitCode, cur.Restarts)))
 	}
@@ -809,6 +817,54 @@ func (m Model) renderFooter() string {
 	hints := "[S] START  [X] STOP  [R] RESTART  [D] DRY RUN  [T] TRIGGER  [H] HISTORY  [V] JSON  [/] FILTER  [?] HELP  [Q] QUIT"
 	b.WriteString(FooterStyle.Render(hints))
 	return b.String()
+}
+
+// sparkBlocks maps a normalized value to one of 8 unicode fill levels.
+var sparkBlocks = []rune{' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+// renderSparkline renders a compact unicode trendline for the most recent
+// values in a history series, scaled against the same [0, maxVal] range as
+// the adjacent gauge so the two stay visually consistent.
+func renderSparkline(values []float64, maxVal float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if maxVal <= 0 {
+		maxVal = 1
+	}
+
+	window := values
+	if len(window) > width {
+		window = window[len(window)-width:]
+	}
+
+	var b strings.Builder
+	for i := 0; i < width-len(window); i++ {
+		b.WriteRune(' ')
+	}
+	for _, v := range window {
+		ratio := v / maxVal
+		if ratio < 0 {
+			ratio = 0
+		}
+		if ratio > 1 {
+			ratio = 1
+		}
+		idx := int(math.Round(ratio * float64(len(sparkBlocks)-1)))
+		b.WriteRune(sparkBlocks[idx])
+	}
+
+	return lipgloss.NewStyle().Foreground(ColorSecondary).Render(b.String())
+}
+
+// uint64sToFloat64s converts a raw memory-byte history series for use with
+// renderSparkline, which operates on float64 series.
+func uint64sToFloat64s(values []uint64) []float64 {
+	res := make([]float64, len(values))
+	for i, v := range values {
+		res[i] = float64(v)
+	}
+	return res
 }
 
 // renderAsciiGauge renders a high-precision block gauge like [████░░░░]

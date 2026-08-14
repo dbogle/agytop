@@ -85,39 +85,49 @@ type RunRecord struct {
 type SidecarState struct {
 	mu sync.RWMutex
 
-	Config          config.SidecarConfig `json:"config"`
-	Status          ProcessStatus        `json:"status"`
-	PID             int                  `json:"pid"`
-	StartedAt       time.Time            `json:"started_at"`
-	StoppedAt       time.Time            `json:"stopped_at"`
-	Restarts        int                  `json:"restarts"`
-	LastExitCode    int                  `json:"last_exit_code"`
-	LastError       string               `json:"last_error"`
-	CPUPercent      float64              `json:"cpu_percent"`
-	MemoryBytes     uint64               `json:"memory_bytes"`
-	Logs            []LogEntry           `json:"logs"`
-	MaxLogs         int                  `json:"-"`
-	RunHistory      []RunRecord          `json:"run_history,omitempty"`
-	MaxHistory      int                  `json:"-"`
-	LastDryRun      *DryRunResult        `json:"last_dry_run,omitempty"`
-	LastScheduleRun time.Time            `json:"last_schedule_run,omitempty"`
-	NextScheduleRun time.Time            `json:"next_schedule_run,omitempty"`
+	Config           config.SidecarConfig `json:"config"`
+	Status           ProcessStatus        `json:"status"`
+	PID              int                  `json:"pid"`
+	StartedAt        time.Time            `json:"started_at"`
+	StoppedAt        time.Time            `json:"stopped_at"`
+	Restarts         int                  `json:"restarts"`
+	LastExitCode     int                  `json:"last_exit_code"`
+	LastError        string               `json:"last_error"`
+	CPUPercent       float64              `json:"cpu_percent"`
+	MemoryBytes      uint64               `json:"memory_bytes"`
+	CPUHistory       []float64            `json:"cpu_history,omitempty"`
+	MemHistory       []uint64             `json:"mem_history,omitempty"`
+	MaxMetricSamples int                  `json:"-"`
+	Logs             []LogEntry           `json:"logs"`
+	MaxLogs          int                  `json:"-"`
+	RunHistory       []RunRecord          `json:"run_history,omitempty"`
+	MaxHistory       int                  `json:"-"`
+	LastDryRun       *DryRunResult        `json:"last_dry_run,omitempty"`
+	LastScheduleRun  time.Time            `json:"last_schedule_run,omitempty"`
+	NextScheduleRun  time.Time            `json:"next_schedule_run,omitempty"`
 
 	cmd        *exec.Cmd          `json:"-"`
 	cancelFunc context.CancelFunc `json:"-"`
 	stopChan   chan struct{}      `json:"-"`
 }
 
+// MaxMetricSamplesDefault caps the CPU/memory history ring buffers at 30
+// minutes of trendline data, sampled once every 5 seconds by metricsLoop.
+const MaxMetricSamplesDefault = 360
+
 // NewSidecarState creates a new state wrapper for a discovered sidecar
 func NewSidecarState(cfg config.SidecarConfig) *SidecarState {
 	s := &SidecarState{
-		Config:     cfg,
-		Status:     StatusStopped,
-		MaxLogs:    1000,
-		Logs:       make([]LogEntry, 0, 100),
-		MaxHistory: 50,
-		RunHistory: make([]RunRecord, 0, 20),
-		stopChan:   make(chan struct{}),
+		Config:           cfg,
+		Status:           StatusStopped,
+		MaxLogs:          1000,
+		Logs:             make([]LogEntry, 0, 100),
+		MaxHistory:       50,
+		RunHistory:       make([]RunRecord, 0, 20),
+		MaxMetricSamples: MaxMetricSamplesDefault,
+		CPUHistory:       make([]float64, 0, MaxMetricSamplesDefault),
+		MemHistory:       make([]uint64, 0, MaxMetricSamplesDefault),
+		stopChan:         make(chan struct{}),
 	}
 	if cfg.Schedule != "" {
 		s.NextScheduleRun = time.Now().Add(1 * time.Minute)
@@ -182,6 +192,25 @@ func (s *SidecarState) GetRunHistory() []RunRecord {
 	return res
 }
 
+// AddMetricSample appends a CPU/memory sample to the rolling history ring
+// buffers used to render Inspector sparklines.
+func (s *SidecarState) AddMetricSample(cpuPercent float64, memBytes uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.CPUHistory) >= s.MaxMetricSamples {
+		s.CPUHistory = append(s.CPUHistory[1:], cpuPercent)
+	} else {
+		s.CPUHistory = append(s.CPUHistory, cpuPercent)
+	}
+
+	if len(s.MemHistory) >= s.MaxMetricSamples {
+		s.MemHistory = append(s.MemHistory[1:], memBytes)
+	} else {
+		s.MemHistory = append(s.MemHistory, memBytes)
+	}
+}
+
 // GetRunStats computes overall run count, success rate %, successes, and failures
 func (s *SidecarState) GetRunStats() (total int, successRate float64, successes int, failures int) {
 	s.mu.RLock()
@@ -215,6 +244,12 @@ func (s *SidecarState) Snapshot() SidecarState {
 	historyCopy := make([]RunRecord, len(s.RunHistory))
 	copy(historyCopy, s.RunHistory)
 
+	cpuHistCopy := make([]float64, len(s.CPUHistory))
+	copy(cpuHistCopy, s.CPUHistory)
+
+	memHistCopy := make([]uint64, len(s.MemHistory))
+	copy(memHistCopy, s.MemHistory)
+
 	var dryRunCopy *DryRunResult
 	if s.LastDryRun != nil {
 		dr := *s.LastDryRun
@@ -232,6 +267,8 @@ func (s *SidecarState) Snapshot() SidecarState {
 		LastError:       s.LastError,
 		CPUPercent:      s.CPUPercent,
 		MemoryBytes:     s.MemoryBytes,
+		CPUHistory:      cpuHistCopy,
+		MemHistory:      memHistCopy,
 		Logs:            logsCopy,
 		RunHistory:      historyCopy,
 		LastDryRun:      dryRunCopy,

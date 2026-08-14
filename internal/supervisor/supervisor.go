@@ -807,15 +807,25 @@ func (s *Supervisor) runBuiltinScheduleLoop(state *SidecarState) {
 }
 
 // metricsLoop periodically updates CPU and Memory for running processes
+// metricSampleEveryNTicks controls how often (in metricsLoop ticks) a
+// CPU/memory sample is appended to each sidecar's sparkline history. Live
+// gauges still refresh every tick; history is thinned to one sample per 5s.
+const metricSampleEveryNTicks = 5
+
 func (s *Supervisor) metricsLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+
+	tick := 0
 
 	for {
 		select {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
+			tick++
+			recordSample := tick%metricSampleEveryNTicks == 0
+
 			s.mu.RLock()
 			for _, state := range s.sidecars {
 				state.mu.RLock()
@@ -829,6 +839,10 @@ func (s *Supervisor) metricsLoop() {
 					state.CPUPercent = cpu
 					state.MemoryBytes = mem
 					state.mu.Unlock()
+
+					if recordSample {
+						state.AddMetricSample(cpu, mem)
+					}
 				}
 			}
 			s.mu.RUnlock()
