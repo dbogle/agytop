@@ -68,7 +68,10 @@ done
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	time.Sleep(250 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("test-worker")
+		return ok && st.Status == StatusRunning && st.PID > 0
+	}, "worker to report RUNNING with a positive PID")
 
 	state, ok := sup.GetState("test-worker")
 	if !ok {
@@ -86,7 +89,10 @@ done
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("test-worker")
+		return ok && st.Status == StatusStopped
+	}, "worker to report STOPPED after Stop")
 	state, _ = sup.GetState("test-worker")
 	if state.Status != StatusStopped {
 		t.Errorf("expected state STOPPED, got %s", state.Status)
@@ -126,7 +132,10 @@ exit 0
 		t.Fatalf("Start returned error: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("test-cron")
+		return ok && st.Status == StatusScheduled
+	}, "scheduler to arm to SCHEDULED")
 	state, _ = sup.GetState("test-cron")
 	if state.Status != StatusScheduled {
 		t.Errorf("expected armed status SCHEDULED, got %s", state.Status)
@@ -137,7 +146,10 @@ exit 0
 		t.Fatalf("TriggerScheduled failed: %v", err)
 	}
 
-	time.Sleep(150 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("test-cron")
+		return ok && st.Status == StatusScheduled && len(st.RunHistory) >= 1
+	}, "triggered run to complete and status to return to SCHEDULED")
 	state, _ = sup.GetState("test-cron")
 	if state.Status != StatusScheduled {
 		t.Errorf("expected status to return to SCHEDULED after run, got %s", state.Status)
@@ -148,7 +160,10 @@ exit 0
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("test-cron")
+		return ok && st.Status == StatusStopped
+	}, "scheduler to report STOPPED after Stop")
 	state, _ = sup.GetState("test-cron")
 	if state.Status != StatusStopped {
 		t.Errorf("expected status STOPPED when paused, got %s", state.Status)
@@ -186,9 +201,15 @@ func TestSupervisorRunHistoryAndStats(t *testing.T) {
 
 	// Trigger success 2 times
 	_ = sup.TriggerScheduledWithSource("cron-success", TriggerManual)
-	time.Sleep(150 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("cron-success")
+		return ok && len(st.RunHistory) >= 1
+	}, "first (manual) run to be recorded in RunHistory")
 	_ = sup.TriggerScheduledWithSource("cron-success", TriggerCron)
-	time.Sleep(150 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("cron-success")
+		return ok && len(st.RunHistory) >= 2
+	}, "second (cron) run to be recorded in RunHistory")
 
 	state, _ := sup.GetState("cron-success")
 	history := state.RunHistory
@@ -212,7 +233,10 @@ func TestSupervisorRunHistoryAndStats(t *testing.T) {
 
 	// Trigger failure
 	_ = sup.TriggerScheduledWithSource("cron-fail", TriggerCron)
-	time.Sleep(150 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup.GetState("cron-fail")
+		return ok && len(st.RunHistory) >= 1
+	}, "failing run to be recorded in RunHistory")
 
 	failState, _ := sup.GetState("cron-fail")
 	failHistory := failState.RunHistory
@@ -254,7 +278,10 @@ done
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		st, ok := sup1.GetState("test-detached-worker")
+		return ok && st.Status == StatusRunning && st.PID > 0
+	}, "detached worker to report RUNNING with a positive PID")
 	st1, ok := sup1.GetState("test-detached-worker")
 	if !ok || st1.Status != StatusRunning || st1.PID <= 0 {
 		t.Fatalf("expected running detached worker with PID > 0, got status %s, PID %d", st1.Status, st1.PID)
@@ -289,9 +316,14 @@ done
 		t.Errorf("expected sup2 to have PID %d, got %d", pid, st2.PID)
 	}
 
-	// Clean up process
+	// Clean up process. Stop() already blocks on TerminatePID's own internal
+	// wait/SIGKILL-fallback loop before returning, so by this point the
+	// process should already be gone; wait for it defensively instead of a
+	// fixed sleep before falling back to a direct terminate.
 	_ = sup2.Stop("test-detached-worker")
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, 5*time.Second, func() bool {
+		return !IsPIDAlive(pid)
+	}, "detached worker process to terminate after Stop")
 	if IsPIDAlive(pid) {
 		_ = TerminatePID(pid)
 	}

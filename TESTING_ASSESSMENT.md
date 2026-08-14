@@ -22,10 +22,10 @@ The absence of tests at those layers is not only a coverage statistic. Because C
 
 ```
                           AUDITED (e515fd2)      CURRENT
-Total Production Code :   3,470 lines            3,507 lines
-Total Test Code       :     374 lines            1,432 lines
-Code-to-Test Ratio    :    ~10:1                   ~2.4:1
-Total Statement Cov.  :    36.1%                   60.5%
+Total Production Code :   3,470 lines            3,588 lines
+Total Test Code       :     374 lines            2,837 lines
+Code-to-Test Ratio    :    ~10:1                   ~1.3:1
+Total Statement Cov.  :    36.1%                   71.5%
 ```
 
 ### Live Defects Found During This Audit
@@ -45,11 +45,11 @@ Coverage as audited at `e515fd2`, alongside the current figure after Phase 0. Th
 
 | Package / Module | Prod Lines | Test Lines | Audited | Now | Health Rating | Key Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| [`internal/config`](file:///home/larry/repos/agytop/internal/config/config.go) | 202 | 338 | 77.6% | **90.6%** | 🟢 Strong | Phase 1 added scope precedence/dedup across all four scopes, malformed-JSON handling, `GetDisplayName` fallbacks, and plugin traversal. |
-| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,579 | 722 | 65.1% | **67.6%** | 🟢 Good Baseline | Dead `GetLogs`/`GetRunHistory` removed; `ClearLogs` wired to `Supervisor.ClearLogs(id)`; `readLastLines` fixed with six cases; `FormatBytes` covered. Backoff, metrics, and SIGKILL fallback still untested. |
-| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,490 | 327 | 0.0% | **54.2%** | 🟡 Moderate | D2 guard plus Phase 1 pure-function tests (sparkline, gauge, `uint64sToFloat64s`). Search filtering, resize clamping, and the async command handlers still untested. |
-| [`cmd/agytop`](file:///home/larry/repos/agytop/cmd/agytop/main.go) | 237 | 45 | 0.0% | **0.0%** | 🔴 Critical Gap | Has a test now (the D4 guard), but it `exec`s a built binary, so the coverage instrument cannot see the subprocess. Real coverage > 0; the number will stay 0 until in-process tests exist. |
-| **Total / Repository** | **3,507** | **1,432** | 36.1% | **60.5%** | 🟢 Overall | Ratio improved ~10:1 → ~2.4:1. Phases 0 and 1 complete; Phases 2–3 outstanding. |
+| [`internal/config`](file:///home/larry/repos/agytop/internal/config/config.go) | 202 | 338 | 77.6% | **90.6%** | 🟢 Strong | Scope precedence/dedup across all four scopes, malformed-JSON handling, `GetDisplayName` fallbacks, plugin traversal. |
+| [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,596 | 1,342 | 65.1% | **76.5%** | 🟢 Strong | Restart policies, backoff growth/cap via the injected fields, `/proc` parsers from fixtures, `readLastLines`, `FormatBytes`, `ClearLogs`, and the snapshot-boundary concurrency test. SIGKILL fallback and reattachment-crash paths still untested. |
+| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,502 | 1,024 | 0.0% | **72.3%** | 🟢 Strong | Pure functions, both modals, search filtering, navigation bounds, resize clamping, all six action keys via a fake, and the async result messages. Full-program flows still need the Phase 3 harness. |
+| [`cmd/agytop`](file:///home/larry/repos/agytop/cmd/agytop/main.go) | 237 | 133 | 0.0% | **0.0%** | 🟡 Instrument Blind | `--version`, `--list`, `--dry-run` exit codes, diagnostic markers, and unknown-flag handling are all covered — but every test `exec`s a built binary, which the coverage instrument cannot see into. Real coverage is substantial; the number stays 0 until an in-process refactor. |
+| **Total / Repository** | **3,588** | **2,837** | 36.1% | **71.5%** | 🟢 Overall | Ratio improved ~10:1 → ~1.3:1. Phases 0–2 complete; Phase 3 outstanding. |
 
 ---
 
@@ -208,6 +208,8 @@ This also makes the CLI test in §6.3 worse than useless as originally drafted: 
 Sections 2.1–2.4 enumerate *what* is untested. This section covers a question they leave open: whether the recommended tests can actually be written against the code as it stands. For three of them the answer is no, and the roadmap in §5 sequences the seam ahead of the test accordingly.
 
 The repo already contains the pattern to follow, twice: [`NewRegistryAt(baseDir string)`](file:///home/larry/repos/agytop/internal/supervisor/registry.go#L49-L57) exists purely so tests can redirect `~/.agytop`, and [`NewSupervisorWithRegistry(configs, registry)`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go#L36) exists to inject it. Together they are what makes `TestDetachedProcessReattachment` possible. Each seam below is the same idea applied to a different hard-coded dependency.
+
+> **✅ All three seams landed in Phase 2.** `baseBackoff`/`maxBackoff` are `Supervisor` fields defaulted to 500ms/30s in the constructor both entry points share (verified: `NewSupervisor` delegates to `NewSupervisorWithRegistry`, so production is unaffected). `internal/ui` declares a nine-method `supervisorAPI` interface satisfied structurally by `*supervisor.Supervisor`, with all four concrete-type sites moved over and `cmd/agytop` untouched. `readLinuxMetrics` now delegates to pure `parseStatmRSS`/`parseStatusVmRSS` parsers testable from fixtures on any OS.
 
 | Blocker | Blocks | Proposed seam |
 | :--- | :--- | :--- |
@@ -393,13 +395,14 @@ gantt
     Config deduplication & error handling       :done, p1_3, 2026-08-14, 1d
     supervisor.FormatBytes unit tests           :done, p1_4, 2026-08-14, 1d
     section Phase 2: Seams, Core & CLI
-    FormatBytes tier rollover fix               :crit, p2_a, 2026-08-15, 1d
-    Testability seams (backoff, ui iface)       :p2_0, 2026-08-21, 2d
-    Bubble Tea Model.Update test suite          :p2_1, 2026-08-23, 3d
-    Supervisor restart policy & backoff tests   :p2_2, 2026-08-25, 3d
-    Deterministic sync helpers, no time.Sleep   :p2_3, 2026-08-27, 2d
-    Concurrent snapshot test under -race        :p2_4, 2026-08-28, 1d
-    CLI subcommand integration tests            :p2_5, 2026-08-29, 2d
+    FormatBytes tier rollover fix               :done, p2_a, 2026-08-14, 1d
+    Testability seams (backoff, ui iface, proc) :done, p2_0, 2026-08-14, 1d
+    Bubble Tea Model.Update test suite          :done, p2_1, 2026-08-14, 1d
+    Supervisor restart policy & backoff tests   :done, p2_2, 2026-08-14, 1d
+    Deterministic sync helpers, no time.Sleep   :done, p2_3, 2026-08-14, 1d
+    Concurrent snapshot test under -race        :done, p2_4, 2026-08-14, 1d
+    CLI subcommand integration tests            :done, p2_5, 2026-08-14, 1d
+    Viewport clamp fix (negative width)         :done, p2_6, 2026-08-14, 1d
     section Phase 3: E2E & Hardening
     Headless TUI teatest harness                :p3_1, 2026-09-01, 4d
     Per-package coverage floors + ratchet       :p3_2, 2026-09-04, 1d
@@ -888,14 +891,33 @@ User-visible in the Inspector's memory readout, though only for a narrow band ju
 
 **2. Two behaviors confirmed correct-as-written and pinned rather than "fixed".** `uint64sToFloat64s` collides `math.MaxUint64` with `math.MaxUint64 - 1` onto the same `float64`; that is inherent to a 53-bit mantissa and the function does nothing beyond the cast. And `LoadSidecarFromFile` on a 0-byte file returns `unexpected end of JSON input` rather than a zero-value config — the safer of the two behaviors. Both are now asserted so a future refactor cannot change them silently.
 
-### 7.5. Still Outstanding
+### 7.5. Findings Surfaced by Phase 2
 
-**Phases 0 and 1 are complete**, along with the two follow-on findings from Phase 0.
+**1. `Shutdown()` does not stop detached daemons — and a merged test was leaking one.** `Supervisor.Shutdown()` only closes the stop channel; `ShutdownAndStopAll()` is the one that calls `Stop` on each sidecar. Sidecars launch with `Setsid`, so a test cleaning up with `Shutdown` leaves a live process behind. `clearlogs_test.go` (merged in the `c`-key fix) did exactly that.
 
-Still open, in the order the roadmap recommends:
-* The one unfixed defect above — `FormatBytes` tier rollover ([§7.4](#74-findings-surfaced-by-phase-1)).
-* **Phase 2**: the testability seams in [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written) (backoff fields, the `internal/ui` supervisor interface, the `/proc` parsing split), then restart-policy and backoff tests, the `Model.Update` suite for search filtering and resize clamping, the `time.Sleep` conversion in the pre-existing supervisor tests, the snapshot-boundary concurrency test in [§4.2](#42--race-only-covers-paths-that-actually-execute), and the CLI subcommand tests.
-* **Phase 3**: the `teatest` harness, the Windows build-tag split if Windows support is ever wanted ([§3.3.2](#332-windows-portability--currently-broken-d1)), and the coverage-gate design.
+It was missed on first review because the check looked for strays *after* the daemon had already self-terminated — the fixture only lives ~4s, so a delayed `ps` shows nothing and looks like success. A PID snapshot taken immediately after the run shows it plainly:
+
+```
+new PIDs after `go test -race ./internal/supervisor/`:
+ 290785    4  bash -c for i in $(seq 1 400); do echo line-$i; sleep 0.01; done
+```
+
+Fixed everywhere, and the leak also caused an intermittent `-count=3` failure (`TempDir RemoveAll cleanup: directory not empty`). *Rule for future tests:* any test that starts a real sidecar must clean up with `ShutdownAndStopAll`, and leak checks must sample immediately, not after the fixture would have exited on its own.
+
+**2. Tiny terminals produced a negative viewport width — found and fixed.** `updateViewportDimensions` clamped `availableHeight` to a minimum of 8 but never clamped width, so the percentage math went negative: at width 1, `rightWidth = (1*62)/100 = 0` and `logViewport.Width` landed at **-4**. Bubbles tolerates it, so nothing panicked and `View()` still rendered — the bug survived purely because nothing asserted on it. This is precisely the [§2.3](#23-internalui-00-coverage) item 4 gap ("dimension clamping for small terminals, `width < 32`"). Both dimensions are now floored at 1, and the resize test asserts it; reverting the clamp reproduces `logViewport.Width = -4`.
+
+**3. `tea.Batch` hides the leaf message from tests.** The `x` and `r` handlers return `tea.Batch(cmds...)` even for a single command, so invoking the returned `tea.Cmd` yields a `tea.BatchMsg` rather than the `stopResultMsg`/`restartResultMsg` underneath. Tests need to unwrap recursively. Calling `stopSidecarCmd`/`restartSidecarCmd` directly, bypassing `Update`, returns the leaf message with no unwrapping. Worth knowing before writing any further Bubble Tea command tests — production code was left alone.
+
+### 7.6. Still Outstanding
+
+**Phases 0, 1 and 2 are complete**, along with every finding they surfaced. All three testability seams from [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written) are in place, all ten `time.Sleep` calls are gone, and repo coverage has gone 36.1% → 71.5%.
+
+Still open — all of it Phase 3:
+* **The `teatest` harness** for full-program flows: rendered screen output, `tea.Cmd` scheduling, and the 200ms `tickMsg` cadence against real supervisor state. Everything reachable by direct `Update` calls is already covered, so this is now a genuinely smaller job than when the audit was written.
+* **The coverage-gate design** ([§5 Phase 3](#phase-3-long-term-ee--hardening)). Note the input from [§7.2](#72-findings-surfaced-by-the-remediation) finding 3: `cmd/agytop` reads 0.0% because its tests `exec` a subprocess, so it must be exempt or measured differently. Per-package floors plus a no-decrease ratchet remain the recommendation; current values make reasonable floors.
+* **The Windows build-tag split**, only if Windows support is ever wanted ([§3.3.2](#332-windows-portability--currently-broken-d1)). It would need `windows-latest` in the CI matrix to mean anything.
+
+Remaining untested behavior worth naming, none of it blocking: the SIGKILL fallback in `killProcessGroup`/`TerminatePID` against a process ignoring SIGTERM, the reattached-process crash path (`watchReattachedProcess`), the ring-buffer eviction bounds at `MaxLogs`/`MaxHistory`/`MaxMetricSamples`, and the macOS `ps`-based CPU fallback.
 
 Finding 3 in [§7.2](#72-findings-surfaced-by-the-remediation) — `cmd/agytop` reporting 0.0% because its test `exec`s a subprocess — is unresolved by design; it is an input to the Phase 3 gate design rather than a defect to fix.
 

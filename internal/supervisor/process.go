@@ -280,6 +280,47 @@ func (s *SidecarState) Snapshot() StateView {
 	}
 }
 
+// parseStatmRSS extracts the resident set size (in pages) from the contents
+// of /proc/<pid>/statm -- a single line of space-separated fields where the
+// second field is the resident page count -- and returns it multiplied by
+// the system page size. Returns (0, false) if the input is too short or the
+// resident field isn't a valid unsigned integer.
+func parseStatmRSS(data []byte) (uint64, bool) {
+	fields := strings.Fields(string(data))
+	if len(fields) < 2 {
+		return 0, false
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return pages * uint64(os.Getpagesize()), true
+}
+
+// parseStatusVmRSS extracts the VmRSS value (in bytes) from the contents of
+// /proc/<pid>/status -- a multi-line "Key:\tvalue kB" block -- by locating
+// the line beginning with "VmRSS:" and converting its kB value to bytes.
+// Returns (0, false) if no such line is present or its value field isn't a
+// valid unsigned integer.
+func parseStatusVmRSS(data []byte) (uint64, bool) {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "VmRSS:") {
+			parts := strings.Fields(line)
+			if len(parts) < 2 {
+				return 0, false
+			}
+			kb, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return 0, false
+			}
+			return kb * 1024, true
+		}
+	}
+	return 0, false
+}
+
 // Helper: Read process memory and CPU on Linux (/proc/<pid>/stat and status)
 func readLinuxMetrics(pid int) (cpu float64, mem uint64) {
 	if pid <= 0 {
@@ -287,32 +328,17 @@ func readLinuxMetrics(pid int) (cpu float64, mem uint64) {
 	}
 
 	// Read memory from /proc/<pid>/statm (pages: total, resident, shared...)
-	statmData, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", pid))
-	if err == nil {
-		fields := strings.Fields(string(statmData))
-		if len(fields) >= 2 {
-			if pages, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
-				pageSize := uint64(os.Getpagesize())
-				mem = pages * pageSize
-			}
+	if statmData, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", pid)); err == nil {
+		if rss, ok := parseStatmRSS(statmData); ok {
+			mem = rss
 		}
 	}
 
 	// Fallback/refinement from /proc/<pid>/status
 	if mem == 0 {
 		if statusData, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid)); err == nil {
-			scanner := bufio.NewScanner(bytes.NewReader(statusData))
-			for scanner.Scan() {
-				line := scanner.Text()
-				if strings.HasPrefix(line, "VmRSS:") {
-					parts := strings.Fields(line)
-					if len(parts) >= 2 {
-						if kb, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
-							mem = kb * 1024
-						}
-					}
-					break
-				}
+			if rss, ok := parseStatusVmRSS(statusData); ok {
+				mem = rss
 			}
 		}
 	}
@@ -370,6 +396,7 @@ func pipeStream(r io.Reader, source LogSource, state *SidecarState) {
 // FormatBytes formats byte sizes into human readable strings
 func FormatBytes(b uint64) string {
 	const unit = 1024
+	const units = "KMGTPE"
 	if b < unit {
 		return fmt.Sprintf("%d B", b)
 	}
@@ -378,5 +405,21 @@ func FormatBytes(b uint64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+
+	val := float64(b) / float64(div)
+	// The tier above is picked by integer division, but the value is
+	// rendered with float division at one decimal place. That mismatch
+	// leaves a sliver just below each boundary (e.g. 1048575 bytes) whose
+	// integer tier is one below where "%.1f" rounds it to (1024.0), so it
+	// never rolls over to the next unit. If rendering would show 1024.0,
+	// promote to the next tier (unless we're already at the last one, "E")
+	// and recompute -- a single promotion always suffices since adjacent
+	// tiers differ by exactly one factor of 1024.
+	if val >= 1023.95 && exp+1 < len(units) {
+		div *= unit
+		exp++
+		val = float64(b) / float64(div)
+	}
+
+	return fmt.Sprintf("%.1f %cB", val, units[exp])
 }

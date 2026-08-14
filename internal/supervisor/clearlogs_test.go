@@ -32,7 +32,11 @@ func TestClearLogsDoesNotResurrectTailedLines(t *testing.T) {
 	}}
 
 	sup := NewSupervisorWithRegistry(cfgs, NewRegistryAt(t.TempDir()))
-	t.Cleanup(sup.Shutdown)
+	// Shutdown() only closes the supervisor's stop channel -- it deliberately
+	// leaves detached (Setsid) daemons running. Only ShutdownAndStopAll()
+	// actually stops them, and without it this test leaks its daemon past the
+	// test run and can trip TempDir cleanup with "directory not empty".
+	t.Cleanup(sup.ShutdownAndStopAll)
 
 	if err := sup.Start("chatty"); err != nil {
 		t.Fatalf("Start failed: %v", err)
