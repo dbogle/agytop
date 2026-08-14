@@ -72,7 +72,7 @@ func (r *Registry) loadLocked() (map[string]PersistedState, error) {
 
 	var states map[string]PersistedState
 	if err := json.Unmarshal(data, &states); err != nil {
-		return make(map[string]PersistedState), nil
+		return nil, fmt.Errorf("parse %s: %w", r.filePath, err)
 	}
 	return states, nil
 }
@@ -84,13 +84,40 @@ func (r *Registry) Save(states map[string]PersistedState) error {
 	return r.saveLocked(states)
 }
 
-// saveLocked writes state to disk; callers must hold r.mu.
+// saveLocked writes state to disk atomically (temp file + rename) so a
+// crash mid-write can never leave state.json truncated or invalid.
+// Callers must hold r.mu.
 func (r *Registry) saveLocked(states map[string]PersistedState) error {
 	data, err := json.MarshalIndent(states, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.filePath, data, 0644)
+
+	dir := filepath.Dir(r.filePath)
+	tmp, err := os.CreateTemp(dir, ".state-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, r.filePath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // UpdateState saves or deletes a single sidecar's persisted record.
@@ -103,7 +130,7 @@ func (r *Registry) UpdateState(record PersistedState, remove bool) error {
 
 	states, err := r.loadLocked()
 	if err != nil {
-		states = make(map[string]PersistedState)
+		return err
 	}
 
 	if remove {
