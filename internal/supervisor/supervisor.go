@@ -69,19 +69,73 @@ func (s *Supervisor) reAttachRunningSidecars() {
 			state.PID = record.PID
 			state.StartedAt = record.StartedAt
 			state.stopChan = make(chan struct{})
+			stopChan := state.stopChan
 			state.mu.Unlock()
 
 			state.AddLog(SourceSupervisor, fmt.Sprintf("Re-attached to running detached sidecar (PID %d).", record.PID))
 
 			// Resume live log tailing
 			if record.LogFile != "" {
-				go TailFile(record.LogFile, state, state.stopChan)
+				go TailFile(record.LogFile, state, stopChan)
 			}
+
+			// We don't own this process's *exec.Cmd (it wasn't started by
+			// this instance), so cmd.Wait() isn't available; poll liveness
+			// instead so a crash after reattach is still detected and
+			// restart policy applied.
+			go s.watchReattachedProcess(state, record.PID, stopChan)
 		} else {
 			// Stale entry in registry, clean up
 			_ = s.registry.UpdateState(record, true)
 		}
 	}
+}
+
+// watchReattachedProcess polls a reattached process's liveness and, once it
+// exits, applies the sidecar's restart policy — mirroring what runProcessLoop
+// does for processes this instance launched directly. The exit code of a
+// reattached process is unknowable (we never had a handle on it), so only
+// the "always" restart policy is honored here.
+func (s *Supervisor) watchReattachedProcess(state *SidecarState, pid int, stopChan chan struct{}) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	processExited := false
+	for !processExited {
+		select {
+		case <-stopChan:
+			// Stop() already handled termination, state, and registry cleanup.
+			return
+		case <-ticker.C:
+			processExited = !IsPIDAlive(pid)
+		}
+	}
+
+	cfg := state.Config
+	_ = s.registry.UpdateState(PersistedState{ID: cfg.ID}, true)
+
+	state.mu.Lock()
+	state.StoppedAt = time.Now()
+	state.PID = 0
+	state.CPUPercent = 0
+	state.MemoryBytes = 0
+	state.mu.Unlock()
+
+	state.AddLog(SourceSupervisor, fmt.Sprintf("Reattached process (PID %d) exited while unmonitored (exit code unknown).", pid))
+
+	if cfg.RestartPolicy == config.RestartAlways {
+		state.mu.Lock()
+		state.Restarts++
+		state.Status = StatusBackoff
+		state.mu.Unlock()
+		state.AddLog(SourceSupervisor, "Restarting per restart policy 'always'...")
+		go s.runProcessLoop(state)
+		return
+	}
+
+	state.mu.Lock()
+	state.Status = StatusStopped
+	state.mu.Unlock()
 }
 
 // AddOrUpdate registers or updates a sidecar configuration
