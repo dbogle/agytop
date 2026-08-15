@@ -23,9 +23,9 @@ The absence of tests at those layers is not only a coverage statistic. Because C
 ```
                           AUDITED (e515fd2)      CURRENT
 Total Production Code :   3,470 lines            3,588 lines
-Total Test Code       :     374 lines            2,837 lines
-Code-to-Test Ratio    :    ~10:1                   ~1.3:1
-Total Statement Cov.  :    36.1%                   71.5%
+Total Test Code       :     374 lines            3,248 lines
+Code-to-Test Ratio    :    ~10:1                   ~1.1:1
+Total Statement Cov.  :    36.1%                   72.2%
 ```
 
 ### Live Defects Found During This Audit
@@ -47,9 +47,9 @@ Coverage as audited at `e515fd2`, alongside the current figure after Phase 0. Th
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | [`internal/config`](file:///home/larry/repos/agytop/internal/config/config.go) | 202 | 338 | 77.6% | **90.6%** | 🟢 Strong | Scope precedence/dedup across all four scopes, malformed-JSON handling, `GetDisplayName` fallbacks, plugin traversal. |
 | [`internal/supervisor`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go) | 1,596 | 1,342 | 65.1% | **76.5%** | 🟢 Strong | Restart policies, backoff growth/cap via the injected fields, `/proc` parsers from fixtures, `readLastLines`, `FormatBytes`, `ClearLogs`, and the snapshot-boundary concurrency test. SIGKILL fallback and reattachment-crash paths still untested. |
-| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,502 | 1,024 | 0.0% | **72.3%** | 🟢 Strong | Pure functions, both modals, search filtering, navigation bounds, resize clamping, all six action keys via a fake, and the async result messages. Full-program flows still need the Phase 3 harness. |
+| [`internal/ui`](file:///home/larry/repos/agytop/internal/ui/model.go) | 1,502 | 1,435 | 0.0% | **74.0%** | 🟢 Strong | Pure functions, both modals, search filtering, navigation bounds, resize clamping, all six action keys via a fake, the async result messages, and full-program flows through a headless `tea.Program` harness. |
 | [`cmd/agytop`](file:///home/larry/repos/agytop/cmd/agytop/main.go) | 237 | 133 | 0.0% | **0.0%** | 🟡 Instrument Blind | `--version`, `--list`, `--dry-run` exit codes, diagnostic markers, and unknown-flag handling are all covered — but every test `exec`s a built binary, which the coverage instrument cannot see into. Real coverage is substantial; the number stays 0 until an in-process refactor. |
-| **Total / Repository** | **3,588** | **2,837** | 36.1% | **71.5%** | 🟢 Overall | Ratio improved ~10:1 → ~1.3:1. Phases 0–2 complete; Phase 3 outstanding. |
+| **Total / Repository** | **3,588** | **3,248** | 36.1% | **72.2%** | 🟢 Overall | Ratio improved ~10:1 → ~1.1:1. All four phases complete. |
 
 ---
 
@@ -404,8 +404,8 @@ gantt
     CLI subcommand integration tests            :done, p2_5, 2026-08-14, 1d
     Viewport clamp fix (negative width)         :done, p2_6, 2026-08-14, 1d
     section Phase 3: E2E & Hardening
-    Headless TUI teatest harness                :p3_1, 2026-09-01, 4d
-    Per-package coverage floors + ratchet       :p3_2, 2026-09-04, 1d
+    Headless program harness (no teatest)       :done, p3_1, 2026-08-15, 1d
+    Per-package coverage floors in CI           :done, p3_2, 2026-08-15, 1d
     Cross-platform OS build tags                :p3_3, 2026-09-05, 3d
 ```
 
@@ -451,12 +451,20 @@ Repo coverage landed at **60.5%**, on target.
 5. **Eliminate `time.Sleep`**:
    * Switch all 10 sleep sites in `supervisor_test.go` to deterministic polling helpers.
 
-### Phase 3: Long-Term E2E & Hardening
-1. **Headless TUI E2E Harness (`teatest`)**:
-   * Verify full interactive flows from launch to dry-run popup and termination — reserved for what direct `Update` calls cannot reach.
+### Phase 3: Long-Term E2E & Hardening — ✅ Complete (except the Windows split)
+
+> **⚠️ This section's `teatest` recommendation was wrong for this repo and was not followed.** Adding `github.com/charmbracelet/x/exp/teatest` rewrites the `go` directive from **1.22.6 to 1.24.0** — breaking *both* CI matrix legs — and drags `bubbletea 0.25.0 → 1.3.5` and `lipgloss 0.9.1 → 1.1.0`, major-version upgrades of the libraries the whole UI is built on. The module has no semver tags, so pinning a compatible older version is unreliable. That is a TUI-stack rewrite arriving as a test dependency.
+>
+> Everything `teatest` wraps already exists in the pinned bubbletea v0.25.0 — `tea.WithInput`, `tea.WithOutput`, `Program.Send`, `Program.Quit`, `Program.Run` — so the harness was built in-house instead. `go.mod` and `go.sum` are unchanged. Prefer this check before adopting any test dependency: ask what it wraps, and whether the base library already exposes it.
+
+1. ~~**Headless TUI E2E Harness (`teatest`)**~~ — ✅ **done, without the dependency.** `internal/ui/program_test.go` runs the real `tea.Program` headlessly against the existing `fakeSupervisor`, covering the initial render, a navigate/modal/quit keystroke sequence asserted on rendered text, clean shutdown with no goroutine leak, and the 200ms `tickMsg` cadence surfacing supervisor state with no key pressed — the polling loop the entire UI depends on, previously never exercised end to end.
+   * *Mechanics worth knowing before touching this file:* `handleResize()` only queries a terminal size when the output type-asserts to `*os.File`, which a buffer-backed `WithOutput` never does. **No `tea.WindowSizeMsg` is ever sent automatically**, so a headless program stays stuck on the pre-ready "Initializing…" view forever unless the test sends one manually right after start. Every test here does. The output buffer is mutex-guarded (the renderer writes from its own goroutine) and every test carries a hard 5s timeout so a wedged program fails loudly instead of hanging CI.
+   * The statement-coverage delta was modest (72.3% → 74.0%) because Phase 2's direct `Update` tests already covered most reachable logic — but it closes a real gap: the `tea.Program` event loop, `tea.Cmd` scheduling, and tick cadence had no coverage at all.
 2. **Multi-Platform OS Isolation**:
    * Extract Unix process management to `process_unix.go` and `process_windows.go` with OS build tags, completing the D1 fix begun in Phase 0.
-3. **CI Coverage Gates — per-package floors, not a repo-wide number**:
+3. ~~**CI Coverage Gates**~~ — ✅ **done.** `scripts/check-coverage.sh` enforces per-package floors set just under the values measured when Phase 3 landed (`config` 85, `supervisor` 70, `ui` 65), with `cmd/agytop` exempt and the reason recorded inline. Wired into CI on the `ubuntu-latest` + `1.23.x` leg only, matching the `gofmt` step — coverage is platform-independent and there is no value in paying for it four times.
+   * It **fails loudly when it cannot measure**, not just when a floor is breached: if any expected package is missing from `go test -cover` output — renamed, removed, skipped by build tags, or lost to an output-format change — it exits non-zero rather than passing vacuously. Both failure modes were verified to return exit code 1, since a gate nobody has watched fail is not yet a gate.
+   * Original reasoning, retained:
    * A single repo-wide threshold is the wrong instrument here. `internal/ui` carries ~317 lines of Lipgloss theme constants and a keybinding table (`styles.go`, `keymap.go`) that exist to be read, not executed; a 75% global gate pressures contributors into writing assertions against rendered ANSI to move a number.
    * Prefer **per-package floors** set just under current values (config 75%, supervisor 60%) plus a **ratchet rule**: no package's coverage may decrease in a PR. This catches regressions — the thing a gate is actually for — without inventing a target for untestable code.
    * Publish `coverage.out` as a CI artifact regardless, so trends are visible even where they aren't enforced.
@@ -927,14 +935,17 @@ This is the concrete payoff of the macOS matrix leg that [§3.1](#31-ci-workflow
 
 ### 7.6. Still Outstanding
 
-**Phases 0, 1 and 2 are complete**, along with every finding they surfaced. All three testability seams from [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written) are in place, all ten `time.Sleep` calls are gone, and repo coverage has gone 36.1% → 71.5%.
+**All four phases are complete**, along with every finding they surfaced. All three testability seams from [§2.5](#25-testability-blockers-code-changes-required-before-tests-can-be-written) are in place, all ten `time.Sleep` calls are gone, CI enforces `vet`, `gofmt` and per-package coverage floors, and repo coverage has gone **36.1% → 72.2%** with the test-to-code ratio at ~1.1:1.
 
-Still open — all of it Phase 3:
-* **The `teatest` harness** for full-program flows: rendered screen output, `tea.Cmd` scheduling, and the 200ms `tickMsg` cadence against real supervisor state. Everything reachable by direct `Update` calls is already covered, so this is now a genuinely smaller job than when the audit was written.
-* **The coverage-gate design** ([§5 Phase 3](#phase-3-long-term-ee--hardening)). Note the input from [§7.2](#72-findings-surfaced-by-the-remediation) finding 3: `cmd/agytop` reads 0.0% because its tests `exec` a subprocess, so it must be exempt or measured differently. Per-package floors plus a no-decrease ratchet remain the recommendation; current values make reasonable floors.
-* **The Windows build-tag split**, only if Windows support is ever wanted ([§3.3.2](#332-windows-portability--currently-broken-d1)). It would need `windows-latest` in the CI matrix to mean anything.
+One roadmap item was deliberately **not** done: the **Windows build-tag split** ([§3.3.2](#332-windows-portability--currently-broken-d1)). That platform was intentionally dropped from releases, so re-adding it would reverse a decision rather than complete a task. It remains available, and would need `windows-latest` in the CI matrix to mean anything.
 
-Remaining untested behavior worth naming, none of it blocking: the SIGKILL fallback in `killProcessGroup`/`TerminatePID` against a process ignoring SIGTERM, the reattached-process crash path (`watchReattachedProcess`), the ring-buffer eviction bounds at `MaxLogs`/`MaxHistory`/`MaxMetricSamples`, and the macOS `ps`-based CPU fallback.
+### Known gaps, in rough order of value
+
+**1. The `schedule` cron expression is never parsed — the largest functional gap in the product.** [`runBuiltinScheduleLoop`](file:///home/larry/repos/agytop/internal/supervisor/supervisor.go#L791) uses a fixed `time.NewTicker(30 * time.Second)` and sets `NextScheduleRun = t.Add(30 * time.Second)`. A sidecar declaring `"0 0 * * *"` therefore fires **every 30 seconds**, while the Inspector displays the cron string as though it were in effect. This is not a testing gap; it is a correctness gap that the UI actively misrepresents, and no amount of coverage on the current code would surface it because the code does exactly what it was written to do.
+
+**2. `Stop()` is not strictly authoritative.** The `stopChan` check is not atomic with the spawn in `runProcessLoop`, so `Stop` can leave one freshly-spawned detached process running that it never signals — it only terminates the PID it read on entry. Harmless for the TUI's own shutdown path; real for anything that depends on `Stop` being complete. See [§7.5](#75-findings-surfaced-by-phase-2).
+
+**3. Behavior still untested**, none of it blocking: the SIGKILL fallback in `killProcessGroup`/`TerminatePID` against a process ignoring SIGTERM, the reattached-process crash path (`watchReattachedProcess`), ring-buffer eviction at `MaxLogs`/`MaxHistory`/`MaxMetricSamples`, and the macOS `ps`-based CPU fallback.
 
 Finding 3 in [§7.2](#72-findings-surfaced-by-the-remediation) — `cmd/agytop` reporting 0.0% because its test `exec`s a subprocess — is unresolved by design; it is an input to the Phase 3 gate design rather than a defect to fix.
 
