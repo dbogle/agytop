@@ -29,7 +29,8 @@ func writeExitScript(t *testing.T, dir string, name string, exitCode int) string
 // restart-policy and backoff-growth tests don't burn wall-clock time.
 func newFastSupervisor(t *testing.T, cfgs []config.SidecarConfig) *Supervisor {
 	t.Helper()
-	sup := NewSupervisorWithRegistry(cfgs, NewRegistryAt(t.TempDir()))
+	// Restart policies respawn, so the registry needs retry-based removal.
+	sup := NewSupervisorWithRegistry(cfgs, NewRegistryAt(newRegistryDir(t)))
 	sup.baseBackoff = 5 * time.Millisecond
 	sup.maxBackoff = 20 * time.Millisecond
 
