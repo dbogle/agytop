@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -114,6 +115,40 @@ func minLineNo(entries []LogEntry) int {
 		}
 	}
 	return min
+}
+
+// newRegistryDir returns a temp directory for a Registry that is removed with
+// retries instead of by t.TempDir().
+//
+// A restarting sidecar creates its log file in the registry directory on every
+// respawn. runProcessLoop only checks stopChan at the top of its loop, so a
+// Stop() landing just after that check still allows one more iteration to
+// create a file -- a file can therefore appear *after* Stop returns.
+// t.TempDir()'s RemoveAll is not retried and fails the whole test when it
+// loses that race with "directory not empty". Retrying tolerates the final
+// straggler. Use this for any test that starts a sidecar with a restart
+// policy; plain t.TempDir() is fine elsewhere.
+func newRegistryDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "agytop-registry-")
+	if err != nil {
+		t.Fatalf("failed to create registry dir: %v", err)
+	}
+
+	// Callers register their shutdown cleanup after this one, so t.Cleanup's
+	// LIFO ordering runs this removal only once the processes are stopped.
+	t.Cleanup(func() {
+		for i := 0; i < 100; i++ {
+			if err := os.RemoveAll(dir); err == nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Logf("warning: could not remove registry dir %s", dir)
+	})
+
+	return dir
 }
 
 // stopAndWait shuts a supervisor down and blocks until its detached children

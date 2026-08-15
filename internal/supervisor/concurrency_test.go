@@ -57,17 +57,15 @@ func TestGetAllStatesConcurrentWithLiveGoroutines(t *testing.T) {
 		},
 	}
 
-	sup := NewSupervisorWithRegistry(cfgs, NewRegistryAt(t.TempDir()))
+	sup := NewSupervisorWithRegistry(cfgs, NewRegistryAt(newRegistryDir(t)))
 	sup.baseBackoff = 5 * time.Millisecond
 	sup.maxBackoff = 15 * time.Millisecond
 	// Plain Shutdown() only stops background tickers -- detached (Setsid)
 	// child processes are deliberately left running so they survive the TUI
-	// exiting (see Supervisor.Shutdown's doc comment). The "chatty" worker
-	// here is a genuine long-running daemon, so it must be explicitly
-	// stopped via ShutdownAndStopAll or it leaks as an orphaned background
-	// process after the test -- which also raced with this test's own
-	// t.TempDir() cleanup (its log file lived under the registry dir) and
-	// caused an intermittent "directory not empty" failure under -count>1.
+	// exiting (see Supervisor.Shutdown's doc comment). "chatty" is a genuine
+	// long-running daemon, so it must be stopped explicitly or it leaks as an
+	// orphaned background process after the test. Registered after
+	// newRegistryDir above so LIFO ordering stops the processes first.
 	t.Cleanup(func() { stopAndWait(t, sup, "chatty", "crashy") })
 
 	if err := sup.Start("chatty"); err != nil {
