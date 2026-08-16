@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,30 +84,45 @@ type RunRecord struct {
 	Snippet   string        `json:"snippet,omitempty"`
 }
 
+// DomainState holds custom domain-level state read from a sidecar's own state.json
+type DomainState struct {
+	LastRunTimestamp string `json:"last_run_timestamp,omitempty"`
+	LastStatus       string `json:"last_status,omitempty"`
+	LastScanned      string `json:"last_scanned,omitempty"`
+}
+
+var convIDRegex = regexp.MustCompile(`"conversationId":\s*"([a-f0-9-]{36})"`)
+var convTitleRegex = regexp.MustCompile(`--title="([^"]+)"`)
+
 // SidecarState holds the live runtime state of a managed sidecar
 type SidecarState struct {
 	mu sync.RWMutex
 
-	Config           config.SidecarConfig `json:"config"`
-	Status           ProcessStatus        `json:"status"`
-	PID              int                  `json:"pid"`
-	StartedAt        time.Time            `json:"started_at"`
-	StoppedAt        time.Time            `json:"stopped_at"`
-	Restarts         int                  `json:"restarts"`
-	LastExitCode     int                  `json:"last_exit_code"`
-	LastError        string               `json:"last_error"`
-	CPUPercent       float64              `json:"cpu_percent"`
-	MemoryBytes      uint64               `json:"memory_bytes"`
-	CPUHistory       []float64            `json:"cpu_history,omitempty"`
-	MemHistory       []uint64             `json:"mem_history,omitempty"`
-	MaxMetricSamples int                  `json:"-"`
-	Logs             []LogEntry           `json:"logs"`
-	MaxLogs          int                  `json:"-"`
-	RunHistory       []RunRecord          `json:"run_history,omitempty"`
-	MaxHistory       int                  `json:"-"`
-	LastDryRun       *DryRunResult        `json:"last_dry_run,omitempty"`
-	LastScheduleRun  time.Time            `json:"last_schedule_run,omitempty"`
-	NextScheduleRun  time.Time            `json:"next_schedule_run,omitempty"`
+	Config                 config.SidecarConfig `json:"config"`
+	Status                 ProcessStatus        `json:"status"`
+	PID                    int                  `json:"pid"`
+	StartedAt              time.Time            `json:"started_at"`
+	StoppedAt              time.Time            `json:"stopped_at"`
+	Restarts               int                  `json:"restarts"`
+	LastExitCode           int                  `json:"last_exit_code"`
+	LastError              string               `json:"last_error"`
+	CPUPercent             float64              `json:"cpu_percent"`
+	MemoryBytes            uint64               `json:"memory_bytes"`
+	CPUHistory             []float64            `json:"cpu_history,omitempty"`
+	MemHistory             []uint64             `json:"mem_history,omitempty"`
+	MaxMetricSamples       int                  `json:"-"`
+	Logs                   []LogEntry           `json:"logs"`
+	MaxLogs                int                  `json:"-"`
+	RunHistory             []RunRecord          `json:"run_history,omitempty"`
+	MaxHistory             int                  `json:"-"`
+	LastDryRun             *DryRunResult        `json:"last_dry_run,omitempty"`
+	LastScheduleRun        time.Time            `json:"last_schedule_run,omitempty"`
+	NextScheduleRun        time.Time            `json:"next_schedule_run,omitempty"`
+	DomainState            *DomainState         `json:"domain_state,omitempty"`
+	AgentConversationID    string               `json:"agent_conversation_id,omitempty"`
+	AgentConversationTitle string               `json:"agent_conversation_title,omitempty"`
+	ScheduleText           string               `json:"schedule_text,omitempty"`
+	HasSchedule            bool                 `json:"has_schedule"`
 
 	cmd        *exec.Cmd          `json:"-"`
 	cancelFunc context.CancelFunc `json:"-"`
@@ -129,10 +147,61 @@ func NewSidecarState(cfg config.SidecarConfig) *SidecarState {
 		MemHistory:       make([]uint64, 0, MaxMetricSamplesDefault),
 		stopChan:         make(chan struct{}),
 	}
-	if cfg.Schedule != "" {
-		s.NextScheduleRun = time.Now().Add(1 * time.Minute)
-	}
+
+	sched := ParseScheduleInfo(cfg, time.Now())
+	s.HasSchedule = sched.HasSchedule
+	s.ScheduleText = sched.Description
+	s.NextScheduleRun = sched.NextRun
+
+	s.refreshDomainStateLocked()
 	return s
+}
+
+func (s *SidecarState) refreshDomainStateLocked() {
+	dirsToTry := []string{s.Config.Directory, s.Config.EffectiveWorkingDir()}
+	if customDataDir := os.Getenv("ANTIGRAVITY_EXECUTABLE_DATA_DIR"); customDataDir != "" {
+		dirsToTry = append(dirsToTry, customDataDir)
+	}
+
+	for _, dir := range dirsToTry {
+		if dir == "" {
+			continue
+		}
+		path := filepath.Join(dir, "state.json")
+		if data, err := os.ReadFile(path); err == nil {
+			var ds DomainState
+			if err := json.Unmarshal(data, &ds); err == nil {
+				if ds.LastRunTimestamp != "" || ds.LastStatus != "" || ds.LastScanned != "" {
+					s.DomainState = &ds
+					break
+				}
+			}
+		}
+	}
+
+	for i := len(s.Logs) - 1; i >= 0; i-- {
+		l := s.Logs[i]
+		if s.AgentConversationID == "" {
+			if match := convIDRegex.FindStringSubmatch(l.Text); len(match) > 1 {
+				s.AgentConversationID = match[1]
+			}
+		}
+		if s.AgentConversationTitle == "" {
+			if match := convTitleRegex.FindStringSubmatch(l.Text); len(match) > 1 {
+				s.AgentConversationTitle = match[1]
+			}
+		}
+		if s.AgentConversationID != "" && s.AgentConversationTitle != "" {
+			break
+		}
+	}
+}
+
+// RefreshDomainState re-scans the sidecar's own state.json and recent logs
+func (s *SidecarState) RefreshDomainState() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshDomainStateLocked()
 }
 
 // AddLog appends a log entry in a thread-safe ring-buffer manner
@@ -150,6 +219,17 @@ func (s *SidecarState) AddLog(source LogSource, text string) {
 		s.Logs = append(s.Logs[1:], entry)
 	} else {
 		s.Logs = append(s.Logs, entry)
+	}
+
+	if s.AgentConversationID == "" {
+		if match := convIDRegex.FindStringSubmatch(text); len(match) > 1 {
+			s.AgentConversationID = match[1]
+		}
+	}
+	if s.AgentConversationTitle == "" {
+		if match := convTitleRegex.FindStringSubmatch(text); len(match) > 1 {
+			s.AgentConversationTitle = match[1]
+		}
 	}
 }
 
@@ -196,23 +276,28 @@ func (s *SidecarState) AddMetricSample(cpuPercent float64, memBytes uint64) {
 // carries no unexported runtime fields (cmd, cancelFunc, stopChan) and no
 // lock, so it is safe to copy freely.
 type StateView struct {
-	Config          config.SidecarConfig `json:"config"`
-	Status          ProcessStatus        `json:"status"`
-	PID             int                  `json:"pid"`
-	StartedAt       time.Time            `json:"started_at"`
-	StoppedAt       time.Time            `json:"stopped_at"`
-	Restarts        int                  `json:"restarts"`
-	LastExitCode    int                  `json:"last_exit_code"`
-	LastError       string               `json:"last_error"`
-	CPUPercent      float64              `json:"cpu_percent"`
-	MemoryBytes     uint64               `json:"memory_bytes"`
-	CPUHistory      []float64            `json:"cpu_history,omitempty"`
-	MemHistory      []uint64             `json:"mem_history,omitempty"`
-	Logs            []LogEntry           `json:"logs"`
-	RunHistory      []RunRecord          `json:"run_history,omitempty"`
-	LastDryRun      *DryRunResult        `json:"last_dry_run,omitempty"`
-	LastScheduleRun time.Time            `json:"last_schedule_run,omitempty"`
-	NextScheduleRun time.Time            `json:"next_schedule_run,omitempty"`
+	Config                 config.SidecarConfig `json:"config"`
+	Status                 ProcessStatus        `json:"status"`
+	PID                    int                  `json:"pid"`
+	StartedAt              time.Time            `json:"started_at"`
+	StoppedAt              time.Time            `json:"stopped_at"`
+	Restarts               int                  `json:"restarts"`
+	LastExitCode           int                  `json:"last_exit_code"`
+	LastError              string               `json:"last_error"`
+	CPUPercent             float64              `json:"cpu_percent"`
+	MemoryBytes            uint64               `json:"memory_bytes"`
+	CPUHistory             []float64            `json:"cpu_history,omitempty"`
+	MemHistory             []uint64             `json:"mem_history,omitempty"`
+	Logs                   []LogEntry           `json:"logs"`
+	RunHistory             []RunRecord          `json:"run_history,omitempty"`
+	LastDryRun             *DryRunResult        `json:"last_dry_run,omitempty"`
+	LastScheduleRun        time.Time            `json:"last_schedule_run,omitempty"`
+	NextScheduleRun        time.Time            `json:"next_schedule_run,omitempty"`
+	DomainState            *DomainState         `json:"domain_state,omitempty"`
+	AgentConversationID    string               `json:"agent_conversation_id,omitempty"`
+	AgentConversationTitle string               `json:"agent_conversation_title,omitempty"`
+	ScheduleText           string               `json:"schedule_text,omitempty"`
+	HasSchedule            bool                 `json:"has_schedule"`
 }
 
 // GetRunStats computes overall run count, success rate %, successes, and
@@ -238,6 +323,10 @@ func (v StateView) GetRunStats() (total int, successRate float64, successes int,
 
 // Snapshot returns a point-in-time, mutex-free view of the state
 func (s *SidecarState) Snapshot() StateView {
+	s.mu.Lock()
+	s.refreshDomainStateLocked()
+	s.mu.Unlock()
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -259,24 +348,41 @@ func (s *SidecarState) Snapshot() StateView {
 		dryRunCopy = &dr
 	}
 
+	var dsCopy *DomainState
+	if s.DomainState != nil {
+		ds := *s.DomainState
+		dsCopy = &ds
+	}
+
+	schedInfo := ParseScheduleInfo(s.Config, time.Now())
+	nextRun := s.NextScheduleRun
+	if nextRun.IsZero() && schedInfo.HasSchedule && s.Config.Builtin != "schedule" && s.Status == StatusRunning {
+		nextRun = schedInfo.NextRun
+	}
+
 	return StateView{
-		Config:          s.Config,
-		Status:          s.Status,
-		PID:             s.PID,
-		StartedAt:       s.StartedAt,
-		StoppedAt:       s.StoppedAt,
-		Restarts:        s.Restarts,
-		LastExitCode:    s.LastExitCode,
-		LastError:       s.LastError,
-		CPUPercent:      s.CPUPercent,
-		MemoryBytes:     s.MemoryBytes,
-		CPUHistory:      cpuHistCopy,
-		MemHistory:      memHistCopy,
-		Logs:            logsCopy,
-		RunHistory:      historyCopy,
-		LastDryRun:      dryRunCopy,
-		LastScheduleRun: s.LastScheduleRun,
-		NextScheduleRun: s.NextScheduleRun,
+		Config:                 s.Config,
+		Status:                 s.Status,
+		PID:                    s.PID,
+		StartedAt:              s.StartedAt,
+		StoppedAt:              s.StoppedAt,
+		Restarts:               s.Restarts,
+		LastExitCode:           s.LastExitCode,
+		LastError:              s.LastError,
+		CPUPercent:             s.CPUPercent,
+		MemoryBytes:            s.MemoryBytes,
+		CPUHistory:             cpuHistCopy,
+		MemHistory:             memHistCopy,
+		Logs:                   logsCopy,
+		RunHistory:             historyCopy,
+		LastDryRun:             dryRunCopy,
+		LastScheduleRun:        s.LastScheduleRun,
+		NextScheduleRun:        nextRun,
+		DomainState:            dsCopy,
+		AgentConversationID:    s.AgentConversationID,
+		AgentConversationTitle: s.AgentConversationTitle,
+		ScheduleText:           schedInfo.Description,
+		HasSchedule:            schedInfo.HasSchedule,
 	}
 }
 

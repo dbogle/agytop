@@ -31,6 +31,14 @@ type Supervisor struct {
 	// exercise restart/backoff behavior without burning wall-clock time.
 	baseBackoff time.Duration
 	maxBackoff  time.Duration
+
+	// cronNow and cronAfter abstract time for runBuiltinScheduleLoop, mirroring
+	// the baseBackoff/maxBackoff precedent above: real wall-clock functions by
+	// default (time.Now / time.After), overridable by tests so a schedule that
+	// legitimately fires hours or days apart can be driven through many
+	// firings in milliseconds instead of real wall-clock time.
+	cronNow   func() time.Time
+	cronAfter func(time.Duration) <-chan time.Time
 }
 
 // NewSupervisor creates a supervisor from sidecar configurations
@@ -49,6 +57,8 @@ func NewSupervisorWithRegistry(configs []config.SidecarConfig, registry *Registr
 		stopChan:    make(chan struct{}),
 		baseBackoff: 500 * time.Millisecond,
 		maxBackoff:  30 * time.Second,
+		cronNow:     time.Now,
+		cronAfter:   time.After,
 	}
 
 	for _, cfg := range configs {
@@ -539,7 +549,34 @@ func (s *Supervisor) TriggerScheduledWithSource(id string, triggerType RunTrigge
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+		cmdArgs := cfg.Args
+		hasDaemonFlag := false
+		for _, arg := range cfg.Args {
+			if arg == "--daemon" {
+				hasDaemonFlag = true
+				break
+			}
+		}
+		if hasDaemonFlag {
+			cmdArgs = make([]string, 0, len(cfg.Args))
+			skipNext := false
+			for i := 0; i < len(cfg.Args); i++ {
+				if skipNext {
+					skipNext = false
+					continue
+				}
+				arg := cfg.Args[i]
+				if arg == "--daemon" {
+					cmdArgs = append(cmdArgs, "--run-now")
+				} else if arg == "--weekday" || arg == "--hour" || arg == "--minute" {
+					skipNext = true
+				} else {
+					cmdArgs = append(cmdArgs, arg)
+				}
+			}
+		}
+
+		cmd := exec.CommandContext(ctx, cfg.Command, cmdArgs...)
 		cmd.Dir = cfg.EffectiveWorkingDir()
 		cmd.Env = os.Environ()
 		for k, v := range cfg.Env {
@@ -564,6 +601,7 @@ func (s *Supervisor) TriggerScheduledWithSource(id string, triggerType RunTrigge
 				Error:     lastErr,
 				Snippet:   lastErr,
 			})
+			state.RefreshDomainState()
 			return
 		}
 
@@ -642,7 +680,11 @@ func (s *Supervisor) TriggerScheduledWithSource(id string, triggerType RunTrigge
 		state.mu.Lock()
 		state.PID = 0
 		if exitCode != 0 {
-			state.Status = StatusFailed
+			if cfg.Builtin == "schedule" {
+				state.Status = StatusFailed
+			} else {
+				state.Status = prevStatus
+			}
 			state.LastError = fmt.Sprintf("Task exited with error: %v", waitErr)
 			state.mu.Unlock()
 			state.AddLog(SourceSupervisor, fmt.Sprintf("Task exited with code %d in %v.", exitCode, duration.Round(time.Millisecond)))
@@ -655,6 +697,8 @@ func (s *Supervisor) TriggerScheduledWithSource(id string, triggerType RunTrigge
 			state.mu.Unlock()
 			state.AddLog(SourceSupervisor, fmt.Sprintf("Task completed successfully in %v.", duration.Round(time.Millisecond)))
 		}
+
+		state.RefreshDomainState()
 	}()
 
 	return nil
@@ -813,21 +857,63 @@ func (s *Supervisor) runProcessLoop(state *SidecarState) {
 	}
 }
 
-// runBuiltinScheduleLoop runs cron / timer for builtin schedule sidecars
+// runBuiltinScheduleLoop honors the sidecar's cron expression (SidecarConfig.
+// Schedule), sleeping until each genuine next-fire time rather than polling
+// on a fixed interval. It recomputes CronSchedule.Next after every firing (so
+// it never drifts) and stays responsive to state.stopChan via select, so Stop
+// interrupts a wait of any length immediately instead of blocking until the
+// next tick.
+//
+// An empty or invalid expression is a configuration error, not a reason to
+// fall back to some default cadence: doing so previously produced exactly
+// this bug's twin (a fixed-interval tick silently standing in for the
+// declared schedule). Instead it's surfaced loudly -- LastError set, a
+// supervisor log line emitted, status forced to FAILED -- so a broken
+// sidecar.json is visible in the TUI immediately rather than quietly firing
+// on the wrong cadence (or not at all).
 func (s *Supervisor) runBuiltinScheduleLoop(state *SidecarState) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	cfg := state.Config
 
-	state.AddLog(SourceSupervisor, "Builtin scheduler initialized and active.")
+	schedule, err := ParseCron(cfg.Schedule)
+	if err != nil {
+		msg := fmt.Sprintf("Invalid schedule expression %q: %v", cfg.Schedule, err)
+		state.mu.Lock()
+		state.Status = StatusFailed
+		state.LastError = msg
+		state.NextScheduleRun = time.Time{}
+		state.mu.Unlock()
+		state.AddLog(SourceSupervisor, msg)
+		return
+	}
+
+	state.AddLog(SourceSupervisor, fmt.Sprintf("Builtin scheduler initialized and active (cron: %q).", cfg.Schedule))
 
 	for {
+		now := s.cronNow()
+		next := schedule.Next(now)
+		if next.IsZero() {
+			msg := fmt.Sprintf("Schedule %q has no future occurrence within %d years; scheduler stopping.", cfg.Schedule, maxCronSearchYears)
+			state.mu.Lock()
+			state.Status = StatusFailed
+			state.LastError = msg
+			state.mu.Unlock()
+			state.AddLog(SourceSupervisor, msg)
+			return
+		}
+
+		state.mu.Lock()
+		state.NextScheduleRun = next
+		state.mu.Unlock()
+
+		wait := next.Sub(now)
+		if wait < 0 {
+			wait = 0
+		}
+
 		select {
 		case <-state.stopChan:
 			return
-		case t := <-ticker.C:
-			state.mu.Lock()
-			state.NextScheduleRun = t.Add(30 * time.Second)
-			state.mu.Unlock()
+		case <-s.cronAfter(wait):
 			_ = s.TriggerScheduledWithSource(state.Config.ID, TriggerCron)
 		}
 	}

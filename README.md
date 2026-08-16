@@ -83,8 +83,9 @@ Options:
 | **`x`** | **Stop / Terminate** active process |
 | **`r`** | **Restart** active process |
 | **`d`** | **Trigger Dry-Run Diagnostics Modal** |
-| **`t`** | **Trigger Immediate Execution** (for scheduled sidecars) |
-| **`h`** | **View Execution Run History & Stats** (for scheduled tasks) |
+| **`t`** | **Trigger Immediate Execution** (Daemons & Scheduled tasks) |
+| **`e`** | **Toggle Error-Only Log Stream** (Errors, Exceptions & Stderr) |
+| **`h`** | **View Execution Run History & Stats** |
 | **`v`** | **View Raw `sidecar.json`** definition |
 | **`/`** | **Filter & Search** sidecars |
 | `l` | Toggle maximized full-screen log stream |

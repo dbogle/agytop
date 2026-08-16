@@ -164,7 +164,11 @@ while True:
   }
 }`), 0644)
 
-	// 2. Cron Task Scheduler (Builtin schedule)
+	// 2. Cron Task Scheduler (Builtin schedule). The expression is every
+	// minute ("* * * * *"), not a real nightly cadence, so that a --demo
+	// session actually shows the scheduler firing (a genuine "0 0 * * *"
+	// nightly schedule would almost never trigger during a live demo now
+	// that cron expressions are actually honored -- see runBuiltinScheduleLoop).
 	s2Dir := filepath.Join(demoBase, "cron-nightly-report")
 	_ = os.MkdirAll(s2Dir, 0755)
 	_ = os.WriteFile(filepath.Join(s2Dir, "report.sh"), []byte(`#!/bin/bash
@@ -177,12 +181,12 @@ echo "[cron] Generating snapshot metrics at $(date)... Done."
 `), 0755)
 
 	_ = os.WriteFile(filepath.Join(s2Dir, "sidecar.json"), []byte(`{
-  "display_name": "Nightly Health Reporter",
-  "description": "Scheduled Antigravity health snapshot and report generator",
+  "display_name": "Frequent Health Reporter (Demo: every minute)",
+  "description": "Scheduled Antigravity health snapshot and report generator -- runs every minute in this demo so the scheduler is visible; a real deployment would use a slower cron expression such as \"0 0 * * *\" for a nightly run.",
   "builtin": "schedule",
   "command": "bash",
   "args": ["report.sh"],
-  "schedule": "0 0 * * *",
+  "schedule": "* * * * *",
   "restart_policy": "never"
 }`), 0644)
 

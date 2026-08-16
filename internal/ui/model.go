@@ -76,9 +76,10 @@ type Model struct {
 	filterInput textinput.Model
 	filtering   bool
 
-	logViewport viewport.Model
-	autoScroll  bool
-	maximized   int // -1: normal, 2: logs maximized
+	logViewport   viewport.Model
+	autoScroll    bool
+	logErrorsOnly bool
+	maximized     int // -1: normal, 2: logs maximized
 
 	dryRunModalOpen  bool
 	helpModalOpen    bool
@@ -103,13 +104,14 @@ func NewModel(sup supervisorAPI) Model {
 	vp.SetContent("")
 
 	m := Model{
-		supervisor:  sup,
-		keymap:      DefaultKeyMap(),
-		focusedPane: 0,
-		filterInput: ti,
-		logViewport: vp,
-		autoScroll:  true,
-		maximized:   -1,
+		supervisor:    sup,
+		keymap:        DefaultKeyMap(),
+		focusedPane:   0,
+		filterInput:   ti,
+		logViewport:   vp,
+		autoScroll:    true,
+		logErrorsOnly: false,
+		maximized:     -1,
 	}
 
 	m.refreshStates()
@@ -382,13 +384,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "t", "T": // Trigger Scheduled Task
+		case "e", "E": // Toggle Errors-Only Log View
+			m.logErrorsOnly = !m.logErrorsOnly
+			if m.logErrorsOnly {
+				m.notification = "Filtered logs: showing errors & stderr only ('e' to show all)"
+			} else {
+				m.notification = "Showing all logs"
+			}
+			m.updateLogContent()
+
+		case "t", "T": // Trigger Scheduled Task / Daemon Run-Now
 			if cur := m.selectedState(); cur != nil {
 				err := m.supervisor.TriggerScheduled(cur.Config.ID)
 				if err != nil {
 					m.notification = fmt.Sprintf("Error triggering: %v", err)
 				} else {
-					m.notification = fmt.Sprintf("Triggered immediate execution of '%s'", cur.Config.GetDisplayName())
+					m.notification = fmt.Sprintf("Triggered immediate run of '%s'", cur.Config.GetDisplayName())
 				}
 			}
 		}
@@ -452,11 +463,28 @@ func (m *Model) updateLogContent() {
 	}
 
 	var b strings.Builder
-	// cur.Logs is already a deep copy from Snapshot(), so no further copying
-	// (and no lock) is needed here.
 	logs := cur.Logs
+	if m.logErrorsOnly {
+		var filtered []supervisor.LogEntry
+		for _, l := range logs {
+			isErr := l.Source == supervisor.SourceStderr ||
+				strings.Contains(strings.ToLower(l.Text), "error") ||
+				strings.Contains(strings.ToLower(l.Text), "fail") ||
+				strings.Contains(strings.ToLower(l.Text), "exception") ||
+				strings.Contains(strings.ToLower(l.Text), "panic")
+			if isErr {
+				filtered = append(filtered, l)
+			}
+		}
+		logs = filtered
+	}
+
 	if len(logs) == 0 {
-		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No log entries recorded. Press [s] to start sidecar or [d] for dry run."))
+		if m.logErrorsOnly {
+			b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No error log entries recorded for this sidecar. (Press 'e' to view all logs)"))
+		} else {
+			b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No log entries recorded. Press [s] to start sidecar, [t] to run now, or [d] for dry run."))
+		}
 	} else {
 		for _, l := range logs {
 			timeStr := lipgloss.NewStyle().Foreground(ColorMuted).Render(l.Timestamp.Format("15:04:05"))
@@ -737,6 +765,36 @@ func (m Model) renderInspectorPane(width, height int) string {
 
 	b.WriteString(fmt.Sprintf("STATUS: %s  (%s)\nSCOPE : %s  POLICY: %s\n", statusBadge, lipgloss.NewStyle().Foreground(ColorMuted).Render(statusExplain), cur.Config.Scope, cur.Config.RestartPolicy))
 
+	// Domain Task Health / Outcome from sidecar's own state.json
+	if cur.DomainState != nil {
+		ds := cur.DomainState
+		var outcomeBadge string
+		switch strings.ToLower(ds.LastStatus) {
+		case "passing", "pass", "ok", "success":
+			outcomeBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#003915")).Background(ColorPrimary).Padding(0, 1).Render("● PASSING")
+		case "failed_and_repaired", "repaired", "fixed":
+			outcomeBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#2A1700")).Background(ColorSecondary).Padding(0, 1).Render("▲ REPAIRED")
+		case "failed", "fail", "error":
+			outcomeBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(ColorDanger).Padding(0, 1).Render("✗ FAILED")
+		default:
+			if ds.LastStatus != "" {
+				outcomeBadge = lipgloss.NewStyle().Foreground(ColorInfo).Render(ds.LastStatus)
+			}
+		}
+
+		timeInfo := ""
+		if ds.LastRunTimestamp != "" {
+			if t, err := time.Parse(time.RFC3339, ds.LastRunTimestamp); err == nil {
+				timeInfo = fmt.Sprintf(" (Last run: %s)", t.Format("2006-01-02 15:04"))
+			} else {
+				timeInfo = fmt.Sprintf(" (Last run: %s)", ds.LastRunTimestamp)
+			}
+		}
+		if outcomeBadge != "" || timeInfo != "" {
+			b.WriteString(fmt.Sprintf("OUTCOME: %s%s\n", outcomeBadge, lipgloss.NewStyle().Foreground(ColorMuted).Render(timeInfo)))
+		}
+	}
+
 	// Live Telemetry Gauges
 	if cur.Status == supervisor.StatusRunning || cur.Status == supervisor.StatusExecuting {
 		uptime := time.Since(cur.StartedAt).Round(time.Second)
@@ -761,18 +819,41 @@ func (m Model) renderInspectorPane(width, height int) string {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorDanger).Render(fmt.Sprintf("FAILURE: %s (Exit Code: %d, Restarts: %d)\n", cur.LastError, cur.LastExitCode, cur.Restarts)))
 	}
 
+	// Schedule and Next Run Countdown
+	if cur.HasSchedule || cur.ScheduleText != "" || cur.Config.Schedule != "" {
+		schedDesc := cur.ScheduleText
+		if schedDesc == "" {
+			schedDesc = cur.Config.Schedule
+		}
+		b.WriteString(fmt.Sprintf("SCHEDULE: %s\n", lipgloss.NewStyle().Foreground(ColorSecondary).Render(schedDesc)))
+		if !cur.NextScheduleRun.IsZero() {
+			countdown := supervisor.FormatCountdown(cur.NextScheduleRun, time.Now())
+			b.WriteString(fmt.Sprintf("NEXT RUN: %s  %s\n",
+				lipgloss.NewStyle().Bold(true).Foreground(ColorInfo).Render(countdown),
+				lipgloss.NewStyle().Foreground(ColorMuted).Render(fmt.Sprintf("(%s)", cur.NextScheduleRun.Format("2006-01-02 15:04"))),
+			))
+		}
+	}
+
 	// Execution Command
 	if cur.Config.Command != "" && cur.Config.Builtin == "" {
 		cmdStr := fmt.Sprintf("%s %s", cur.Config.Command, strings.Join(cur.Config.Args, " "))
 		b.WriteString(fmt.Sprintf("EXEC : %s\n", lipgloss.NewStyle().Foreground(ColorInfo).Render(cmdStr)))
 	} else if cur.Config.Builtin != "" {
-		b.WriteString(fmt.Sprintf("BUILTIN: %s  CRON: %s\n", cur.Config.Builtin, lipgloss.NewStyle().Foreground(ColorSecondary).Render(cur.Config.Schedule)))
+		b.WriteString(fmt.Sprintf("BUILTIN: %s\n", cur.Config.Builtin))
 		if cur.Config.Command != "" {
 			b.WriteString(fmt.Sprintf("TARGET : %s %s\n", cur.Config.Command, strings.Join(cur.Config.Args, " ")))
 		}
-		if !cur.NextScheduleRun.IsZero() {
-			b.WriteString(lipgloss.NewStyle().Foreground(ColorInfo).Render(fmt.Sprintf("NEXT TRIGGER: %s   LAST RUN: %s\n", cur.NextScheduleRun.Format("15:04:05"), cur.LastScheduleRun.Format("15:04:05"))))
+	}
+
+	// Antigravity AI Agent Conversation Info
+	if cur.AgentConversationID != "" {
+		title := cur.AgentConversationTitle
+		if title == "" {
+			title = "Antigravity Agent Task"
 		}
+		b.WriteString(fmt.Sprintf("AGENT   : %s\n", lipgloss.NewStyle().Bold(true).Foreground(ColorInfo).Render(title)))
+		b.WriteString(fmt.Sprintf("AGENT ID: %s\n", lipgloss.NewStyle().Foreground(ColorSecondary).Render(cur.AgentConversationID)))
 	}
 
 	// Environment Variables Table (Compact 2-column)
@@ -802,7 +883,7 @@ func (m Model) renderInspectorPane(width, height int) string {
 		))
 
 		if len(cur.RunHistory) == 0 {
-			b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  (No runs recorded yet. Press 't' to trigger.)\n"))
+			b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  (No runs recorded yet. Press 't' to run now.)\n"))
 		} else {
 			startIdx := len(cur.RunHistory) - 3
 			if startIdx < 0 {
@@ -839,7 +920,11 @@ func (m Model) renderLogPane(width, height int) string {
 	if !m.autoScroll {
 		scrollState = lipgloss.NewStyle().Foreground(ColorSecondary).Render("[FOLLOW: PAUSED - 'a' to resume]")
 	}
-	b.WriteString(fmt.Sprintf("%s  %s  %s\n", title, scrollState, lipgloss.NewStyle().Foreground(ColorMuted).Render("('l' maximize, 'c' clear)")))
+	filterState := ""
+	if m.logErrorsOnly {
+		filterState = " " + lipgloss.NewStyle().Bold(true).Foreground(ColorDanger).Render("[ERRORS ONLY - 'e' all]")
+	}
+	b.WriteString(fmt.Sprintf("%s  %s%s  %s\n", title, scrollState, filterState, lipgloss.NewStyle().Foreground(ColorMuted).Render("('l' max, 'e' errs, 'c' clear)")))
 	b.WriteString(m.logViewport.View())
 	return b.String()
 }
@@ -852,7 +937,7 @@ func (m Model) renderFooter() string {
 		b.WriteString("  |  ")
 	}
 
-	hints := "[S] START  [X] STOP  [R] RESTART  [D] DRY RUN  [T] TRIGGER  [H] HISTORY  [V] JSON  [/] FILTER  [?] HELP  [Q] QUIT"
+	hints := "[S] START  [X] STOP  [R] RESTART  [D] DRY RUN  [T] RUN NOW  [E] ERRORS  [H] HISTORY  [V] JSON  [/] FILTER  [?] HELP  [Q] QUIT"
 	b.WriteString(FooterStyle.Render(hints))
 	return b.String()
 }
